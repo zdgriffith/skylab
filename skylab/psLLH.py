@@ -393,7 +393,7 @@ class PointSourceLLH(object):
         self.reset()
 
         # get the zenith band with correct boundaries
-        dec = src_dec#(np.pi - 2. * self.delta_ang) / np.pi * src_dec
+        dec = (np.pi - 2. * self.delta_ang) / np.pi * src_dec
         min_dec = max(-np.pi / 2., dec - self.delta_ang)
         max_dec = min(np.pi / 2., dec + self.delta_ang)
 
@@ -418,7 +418,7 @@ class PointSourceLLH(object):
         self._ev = self.exp[exp_mask]
 
         # update rightascension information for scrambled events
-        if scramble and not self.fix:
+        if scramble:
             self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
                                                  size=len(self._ev))
 
@@ -1060,6 +1060,8 @@ class PointSourceLLH(object):
 
         assert(n == len(self._ev))
 
+        #print(self._ev_S[0:100])
+        #print(self._ev["B"][0:100])
         SoB = self._ev_S / self._ev["B"]
 
         w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
@@ -1167,6 +1169,144 @@ class PointSourceLLH(object):
 
         # Set all weights once for this src location, if not already cached
         self._select_events(src_ra, src_dec, inject=inject, scramble=scramble)
+
+        if self._N < 1:
+            # No events selected
+            return 0., dict([(par, par_s) if not par == "nsources" else (par, 0.)
+                             for par, par_s in zip(self.params, self.par_seeds)])
+
+        # get seeds
+        pars = self.par_seeds
+        inds = [i for i, par in enumerate(self.params) if par in kwargs]
+        pars[inds] = np.array([kwargs.pop(par) for par in self.params
+                                               if par in kwargs])
+
+        # minimizer setup
+        xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+                                _llh, pars,
+                                bounds=self.par_bounds,
+                                **kwargs)
+
+        # set up mindict to enter while, exit if fit looks nice
+        i = 0
+        min_dict = dict(warnflag=0, task="FACTR")
+        while min_dict["warnflag"] == 0 and "FACTR" in min_dict["task"]:
+            # no stop due to gradient
+            xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
+                                    _llh, pars,
+                                    bounds=self.par_bounds,
+                                    **kwargs)
+            pars[0] = self.random.uniform(0., 2. * pars[0])
+            if i > 100:
+                raise RuntimeError("Did not manage good fit")
+
+        if fmin > 0 and (self.par_bounds[0][0] <= 0
+                         and self.par_bounds[0][1] >= 0):
+            # null hypothesis is part of minimisation, fit should be negative
+            if abs(fmin) > kwargs["pgtol"]:
+                # SPAM only if the distance is large
+                logger.error("Fitter returned positive value, "
+                             "force to be zero at null-hypothesis. "
+                             "Minimum found {0} with fmin {1}".format(
+                                 xmin, fmin))
+            fmin = 0
+            xmin[0] = 0.
+
+        if self._N > 0 and abs(xmin[0]) > _rho_max * self._n:
+            logger.error(("nsources > {0:7.2%} * {1:6d} selected events, "
+                          "fit-value nsources = {2:8.1f}").format(
+                              _rho_max, self._n, xmin[0]))
+
+        xmin = dict([(par, xi) for par, xi in zip(self.params, xmin)])
+
+        # Separate over and underfluctuations
+        fmin *= -np.sign(xmin["nsources"])
+
+        return fmin, xmin
+
+    def fit_extended_source(self, template_map, **kwargs):
+        """Minimize the negative log-Likelihood using a source template 
+
+        Parameters
+        ----------
+        template_map:  array in healpix format
+
+        Returns
+        -------
+        fmin : float
+            Minimal function value turned into test statistic
+            -sign(ns)*logLambda
+        xmin : dict
+            Parameters minimising the likelihood ratio.
+
+        Other parameters
+        ----------------
+        scramble : bool
+            Scramble events prior to selection.
+
+        inject
+            Source injector
+
+        kwargs
+            Parameters passed to the L-BFGS-B minimiser.
+
+        """
+
+        # wrap llh function to work with arrays
+        def _llh(x, *args):
+            """Scale likelihood variables so that they are both normalized.
+            Returns -logLambda which is the test statistic and should
+            be distributed with a chi2 distribution assuming the null
+            hypothesis is true.
+
+            """
+
+            fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
+
+            fun, grad = self.llh(**fit_pars)
+
+            # return negative value needed for minimization
+            return -fun, -grad
+
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+        kwargs.setdefault("pgtol", _pgtol)
+
+        # Set all weights once for this src location, if not already cached
+
+        # reset
+        self.reset()
+
+        # number of total events
+        self._N = len(self.exp)
+
+        # update the zenith selection and background probability
+        self._ev = self.exp
+
+        # update rightascension information for scrambled events
+        if scramble and not self.fix:
+            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
+                                                 size=len(self._ev))
+
+        if inject is not None:
+            self._ev = np.append(self._ev,
+                                 numpy.lib.recfunctions.append_fields(
+                                    inject, "B",
+                                    self.llh_model.background(inject),
+                                    usemask=False))
+
+            self._N += len(inject)
+
+        # calculate signal term
+        self._ev_S = self.llh_model.signal(self._ev)
+
+        # do not calculate values with signal below threshold
+        ev_mask = self._ev_S > self.thresh_S
+        self._ev = self._ev[ev_mask]
+        self._ev_S = self._ev_S[ev_mask]
+
+        # set number of selected events
+        self._n = len(self._ev)
 
         if self._N < 1:
             # No events selected

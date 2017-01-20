@@ -29,6 +29,8 @@ import numpy as np
 import scipy.interpolate
 from scipy.stats import norm
 
+import healpy as hp
+
 # local package imports
 from . import set_pars
 from .utils import kernel_func
@@ -115,6 +117,13 @@ class NullModel(object):
     def signal(self, *args, **kwargs):
         r"""Calculation of the signal probability *S* in the point source
         likelihood, mainly a spatial dependent term.
+
+        """
+        self.__raise__()
+
+    def extended_signal(self, *args, **kwargs):
+        r"""Calculation of the signal probability *S* for an extended source
+        , mainly a spatial dependent term.
 
         """
         self.__raise__()
@@ -349,6 +358,28 @@ class ClassicLLH(NullModel):
         return (1./2./np.pi/ev["sigma"]**2
                 * np.exp(-dist**2 / 2. / ev["sigma"]**2))
 
+    def extended_signal(self, template_map, ev):
+        r"""Calculates signal probabilities for each event
+        from a template source map
+
+        Parameters
+        -----------
+        ev : structured array
+            Event array, import information: sinDec, ra, sigma
+        template_map:  source map in healpix array format
+
+        Returns
+        --------
+        P : array-like
+            Spatial signal probability for each event
+
+        """
+
+        sig_pdf = np.load(template_map)
+        nside   = hp.npix2nside(len(sig_pdf))
+        pix     = hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
+        return  np.take(sig_pdf, pix)
+        
     def weight(self, ev, **params):
         r"""For classicLLH, no weighting of events
 
