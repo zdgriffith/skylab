@@ -683,23 +683,6 @@ class TemplateInjector(Injector):
 
         """
 
-
-        '''
-        #A, B = self._sinDec_range
-        m = (A - B + 2. * self.sinDec_bandwidth) / (A - B)
-        b = self.sinDec_bandwidth * (A + B) / (B - A)
-
-        sinDec = m * np.sin(self.src_dec) + b
-
-        min_sinDec = max(A, sinDec - self.sinDec_bandwidth)
-        max_sinDec = min(B, sinDec + self.sinDec_bandwidth)
-
-        self._min_dec = np.arcsin(min_sinDec)
-        self._max_dec = np.arcsin(max_sinDec)
-        # solid angle of selected events
-        self._omega = 2. * np.pi * (max_sinDec - min_sinDec)
-        '''
-
         # solid angle of selected events
         self._min_dec = np.arcsin(self._sinDec_range[0])
         self._max_dec = np.arcsin(self._sinDec_range[1])

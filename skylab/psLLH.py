@@ -1118,6 +1118,95 @@ class PointSourceLLH(object):
 
         return LogLambda, grad
 
+    def extended_llh(self, template_map, **fit_pars):
+        r"""Calculate the likelihood ratio for the selected events.
+
+        Evaluate pointsource likelihood using cached values. For new input,
+        values are re-evaluated and cached.
+
+        .. math:: \log\Lambda=\sum_i\log\left(
+                  \frac{n_s}{N}\left(\frac{\mathcal{S}}{\mathcal{B}}w-1\right)
+                                     +1\right)
+
+        Parameters
+        ----------
+        fit_pars : dict
+            Dictionary with all fit parameters, nsources and all defined by
+            `llh_model`.
+
+        Returns
+        -------
+        funval : float
+            Function value
+        grad : array_like
+            Gradient at the point.
+        """
+
+        nsources = fit_pars.pop("nsources")
+
+        N = self._N
+        n = self._n
+
+        assert(n == len(self._ev))
+
+        S_sc = self.llh_model.signal_sc(template_map, self._ev)
+        B = (1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
+        SoB = self._ev_S / B
+
+        w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
+
+        x = (SoB * w - 1.) / N
+
+        # check which sums of the likelihood are close to the divergence
+        aval = -1. + _aval
+        alpha = nsources * x
+
+        # select events close to divergence
+        xmask = alpha > aval
+
+        # function value, log1p for OK, otherwise quadratic taylor
+        funval = np.empty_like(alpha, dtype=np.float)
+        funval[xmask] = np.log1p(alpha[xmask])
+        funval[~xmask] = (np.log1p(aval)
+                      + 1. / (1.+aval) * (alpha[~xmask] - aval)
+                      - 1./2./(1.+aval)**2 * (alpha[~xmask]-aval)**2)
+        funval = funval.sum()
+        if N > n:
+            funval += (N - n) * np.log1p(-nsources / N)
+
+        # gradients
+
+        # in likelihood function
+        ns_grad = np.empty_like(alpha, dtype=np.float)
+        ns_grad[xmask] = x[xmask] / (1. + alpha[xmask])
+        ns_grad[~xmask] = (x[~xmask] / (1. + aval)
+                       - x[~xmask] * (alpha[~xmask] - aval) / (1. + aval)**2)
+        ns_grad = ns_grad.sum()
+        if N > n:
+            ns_grad -= (N - n) / (N - nsources)
+
+        # in weights
+        if grad_w is not None:
+            par_grad = 1. / N * SoB * grad_w
+
+            par_grad[:, xmask] *= nsources / (1. + alpha[xmask])
+            par_grad[:, ~xmask] *= (nsources / (1. + aval)
+                                    - nsources * (alpha[~xmask] - aval)
+                                        / (1. + aval)**2)
+
+            par_grad = par_grad.sum(axis=-1)
+
+        else:
+            par_grad = np.zeros((0,))
+
+        grad = np.append(ns_grad, par_grad)
+
+        # multiply by two for chi2 distributed test-statistic
+        LogLambda = 2. * funval
+        grad = 2. * grad
+
+        return LogLambda, grad
+
     def fit_source(self, src_ra, src_dec, **kwargs):
         """Minimize the negative log-Likelihood at source position(s).
 
@@ -1224,12 +1313,14 @@ class PointSourceLLH(object):
 
         return fmin, xmin
 
-    def fit_extended_source(self, template_map, **kwargs):
+    def fit_extended_source(self, template_map, scrambled_map, sigma_bins, **kwargs):
         """Minimize the negative log-Likelihood using a source template 
 
         Parameters
         ----------
         template_map:  array in healpix format
+
+        sigma_bins: bins used for creating template_map
 
         Returns
         -------
@@ -1263,7 +1354,7 @@ class PointSourceLLH(object):
 
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
 
-            fun, grad = self.llh(**fit_pars)
+            fun, grad = self.extended_llh(scrambled_map, **fit_pars)
 
             # return negative value needed for minimization
             return -fun, -grad
@@ -1298,7 +1389,7 @@ class PointSourceLLH(object):
             self._N += len(inject)
 
         # calculate signal term
-        self._ev_S = self.llh_model.signal(self._ev)
+        self._ev_S = self.llh_model.extended_signal(template_map, sigma_bins, self._ev)
 
         # do not calculate values with signal below threshold
         ev_mask = self._ev_S > self.thresh_S

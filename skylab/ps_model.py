@@ -114,6 +114,14 @@ class NullModel(object):
         """
         self.__raise__()
 
+    def signal_sc(self, *args, **kwargs):
+        r"""Calculation of the right ascension scrambled signal acceptance for
+        background subtraction
+
+        """
+
+        self.__raise__()
+
     def signal(self, *args, **kwargs):
         r"""Calculation of the signal probability *S* in the point source
         likelihood, mainly a spatial dependent term.
@@ -358,7 +366,7 @@ class ClassicLLH(NullModel):
         return (1./2./np.pi/ev["sigma"]**2
                 * np.exp(-dist**2 / 2. / ev["sigma"]**2))
 
-    def extended_signal(self, template_map, ev):
+    def extended_signal(self, template_map, sigma_bins, ev):
         r"""Calculates signal probabilities for each event
         from a template source map
 
@@ -375,11 +383,44 @@ class ClassicLLH(NullModel):
 
         """
 
+        bin_vals = np.digitize(ev['sigma'], sigma_bins)
         sig_pdf = np.load(template_map)
-        nside   = hp.npix2nside(len(sig_pdf))
+        npix    = len(sig_pdf[0])
+        nside   = hp.npix2nside(npix)
         pix     = hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
-        return  np.take(sig_pdf, pix)
+        indices = np.arange(npix)
+        signal_vals = np.zeros(npix) 
+
+        for i, sbin in enumerate(sigma_bins):
+            mask = np.equal(bin_vals, i)
+            vals = np.take(sig_pdf[i], pix[mask])
+            for j, index in enumerate(indices[mask]):
+                signal_vals[index] += vals[j]
+
+        #return  np.take(sig_pdf, pix)
+        return 1.02*2*signal_vals 
         
+    def signal_sc(self, scrambled_map, ev):
+        bin_size = 0.02
+        dec_bins = np.arange(-1, -0.78, bin_size)
+        sig_pdf  = np.load(scrambled_map)
+        nside    = hp.npix2nside(len(sig_pdf))
+
+        npix     = hp.nside2npix(nside)
+        dec, ra  = hp.pix2ang(nside, range(npix))
+        dec      = np.pi/2. - dec
+
+        vals, bins = np.histogram(np.sin(dec), bins = dec_bins, weights = sig_pdf/(np.sum(sig_pdf)*bin_size*2*np.pi))
+        bin_vals   = np.digitize(ev['sinDec'], dec_bins, right = True)
+        new_vals = []
+        for val in bin_vals:
+            if val > len(vals) -1:
+                new_vals.append(len(vals)-1)
+            else:
+                new_vals.append(val)
+                
+        return np.take(vals, np.array(new_vals))
+
     def weight(self, ev, **params):
         r"""For classicLLH, no weighting of events
 
