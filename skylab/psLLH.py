@@ -1029,6 +1029,62 @@ class PointSourceLLH(object):
 
         return trials
 
+    def do_extended_trials(self, template_map, sigma_bins, **kwargs):
+        r"""Calculation of scrambled trials.
+
+        Perform trials on scrambled event maps to estimate the event
+        distribution.
+
+        Parameters
+        ----------
+
+        template_map : array of healpix arrays
+            template maps used for signal pdf construction, in bins of PSF sizes
+        sigma_bins: array
+            bins of PSF sizes used for template map convolution
+
+        Returns
+        -------
+        trials : recarray
+            recarray with fields of fit-values and TS for number of injected
+            events.
+
+        Other parameters
+        ----------------
+        mu_gen : iterator
+            Iterator yielding injected events. Stored at ps_injector.
+        n_iter : int
+            Number of iterations to perform.
+
+        kwargs
+            Other keyword arguments are passed to the source fitting.
+
+        """
+        mu_gen = kwargs.pop("mu", repeat((0, None)))
+
+        # values for iteration procedure
+        n_iter = kwargs.pop("n_iter", _n_trials)
+
+        trials = np.empty((n_iter, ), dtype=[("n_inj", np.int),
+                                             ("TS", np.float)]
+                                            + [(par, np.float)
+                                               for par in self.params])
+
+        samples = [mu_gen.next() for i in xrange(n_iter)]
+        trials["n_inj"] = [sam[0] for sam in samples]
+        samples = [sam[1] for sam in samples]
+
+        result = [self.fit_extended_source(template_map, sigma_bins, inject=sam,
+                                           scramble=True, **kwargs)
+                  for sam in samples]
+
+        for i, res in enumerate(result):
+            trials["TS"][i] = res[0]
+            for key, val in res[1].iteritems():
+                trials[key][i] = val
+
+        return trials
+
     def llh(self, **fit_pars):
         r"""Calculate the likelihood ratio for the selected events.
 
@@ -1118,7 +1174,7 @@ class PointSourceLLH(object):
 
         return LogLambda, grad
 
-    def extended_llh(self, template_map, **fit_pars):
+    def extended_llh(self, src_map, **fit_pars):
         r"""Calculate the likelihood ratio for the selected events.
 
         Evaluate pointsource likelihood using cached values. For new input,
@@ -1130,6 +1186,9 @@ class PointSourceLLH(object):
 
         Parameters
         ----------
+        src_map : healpix array
+            (template map x acceptance) used for signal subtraction from background
+
         fit_pars : dict
             Dictionary with all fit parameters, nsources and all defined by
             `llh_model`.
@@ -1149,8 +1208,9 @@ class PointSourceLLH(object):
 
         assert(n == len(self._ev))
 
-        S_sc = self.llh_model.signal_sc(template_map, self._ev)
+        S_sc = self.llh_model.signal_sc(src_map, self._ev)
         B = (1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
+        #print(np.mean(B/self._ev["B"]))
         SoB = self._ev_S / B
 
         w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
@@ -1313,12 +1373,15 @@ class PointSourceLLH(object):
 
         return fmin, xmin
 
-    def fit_extended_source(self, template_map, scrambled_map, sigma_bins, **kwargs):
+    def fit_extended_source(self, template_map, sigma_bins, scrambled_map = '', extended_llh = False, **kwargs):
         """Minimize the negative log-Likelihood using a source template 
 
         Parameters
         ----------
-        template_map:  array in healpix format
+        template_map : array of healpix arrays
+            template maps used for signal pdf construction, in bins of PSF sizes
+        sigma_bins: array
+            bins of PSF sizes used for template map convolution
 
         sigma_bins: bins used for creating template_map
 
@@ -1354,7 +1417,10 @@ class PointSourceLLH(object):
 
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
 
-            fun, grad = self.extended_llh(scrambled_map, **fit_pars)
+            if extended_llh == True:
+                fun, grad = self.extended_llh(scrambled_map, **fit_pars)
+            else:
+                fun, grad = self.llh(**fit_pars)
 
             # return negative value needed for minimization
             return -fun, -grad
@@ -1797,6 +1863,306 @@ class PointSourceLLH(object):
                                        self.do_trials(src_ra, src_dec,
                                                       n_iter=n_bckg,
                                                       **kwargs))
+
+                    stop = time.time()
+                    mins, secs = divmod(stop - start, 60)
+                    hours, mins = divmod(mins, 60)
+
+                    print("\t{0:6d} Background scrambles finished ".format(
+                                len(trials))+
+                          "after {0:3d}h {1:2d}' {2:4.2f}''".format(
+                              int(hours), int(mins), secs))
+
+                    print("Fit background function to scrambles")
+                    if self.nsource_bounds[0] < 0:
+                        print("Fit two sided chi2 to background scrambles")
+                        fitfun = utils.twoside_chi2
+                    else:
+                        print("Fit delta chi2 to background scrambles")
+                        fitfun = utils.delta_chi2
+                    fit = fitfun(trials["TS"][trials["n_inj"] == 0], df=2.,
+                                 floc=0., fscale=1.)
+
+                    # give information about the fit
+                    print(fit)
+
+                # use fitted function to calculate needed TS-value
+                TSval_i = np.asscalar(fit.isf(alpha_i))
+
+            # calculate sensitivity
+            mu_i, trials = do_estimation(TSval_i, beta_i, trials)
+
+            TS.append(TSval_i)
+            mu_flux.append(mu_i)
+            flux.append(inj.mu2flux(mu_i))
+
+            stop = time.time()
+
+            mins, secs = divmod(stop - start, 60)
+            hours, mins = divmod(mins, 60)
+            print("\tFinished after "
+                  "{0:3d}h {1:2d}' {2:4.2f}''".format(int(hours), int(mins),
+                                                      secs))
+            print("\t\tInjected: {0:6.2f}".format(mu_i))
+            print("\t\tFlux    : {0:.2e}".format(flux[-1]))
+            print("\t\tTrials  : {0:6d}".format(len(trials)))
+            print("\t\tTime    : {0:6.2f} trial(s) / sec".format(
+                float(len(trials)) / (stop - start)))
+            print()
+
+            sys.stdout.flush()
+
+        # add weights
+        w = np.vstack([utils.poisson_weight(trials["n_inj"], mu_flux_i)
+                       for mu_flux_i in mu_flux])
+
+        result = dict(flux=flux, mu=mu_flux, TSval=TS, alpha=alpha, beta=beta,
+                      fit=fit, trials=trials, weights=w)
+
+        return result
+
+    def extended_sensitivity(self, template_map, src_map, sigma_bins, dec_bins, alpha, beta, inj, mc, **kwargs):
+        """Calculate extended source sensitivity for a given source
+        hypothesis using weights.
+
+        All trials calculated are used at each step and weighted using the
+        Poissonian probability. Credits for this idea goes to Asen Christov of
+        IceCube in Geneva.
+
+        Parameters
+        ----------
+        template_map : array of healpix arrays
+            template maps used for signal pdf construction, in bins of PSF sizes
+        src_map : healpix array
+            (template map x acceptance) used for signal subtraction from background
+        sigma_bins: array
+            bins of PSF sizes used for template map convolution
+        dec_bins: array
+            bins of declination used for mc sampling in signal injection
+        alpha : array-like (m, )
+            Error of first kind
+        beta : array-like (m, )
+            Error of second kind
+        inj : skylab.BaseInjector instance
+            Injection module
+        mc : numpy-recarray
+            Monte Carlo to use for injection. Needs all fields that
+            is stored in experimental data, plus true information that the
+            injector uses: trueRa, trueDec, trueE, ow
+
+        Returns
+        -------
+        dict containting the following keys
+
+        flux : array-like (m, )
+            Flux needed to reach sensitivity of *alpha*, *beta*
+        mu : array-like (m, )
+            Number of injected events corresponding to flux.
+        TSval : array-like (m, )
+            TS value at value of alpha for background
+        weights : array-like (m, n)
+            Weights for all n trials corresponding to m mu values.
+        trials : recarray (n, )
+            Array containing all information about trial of each fit
+
+        Optional Parameters
+        --------------------
+        n_bckg : int
+            Number of background trials to do if needed
+        n_iter : int
+            Number of trials per iteration
+        fit : None, callable or str
+            If str, function value to fit to background, possible values are
+            one of ["chi2", "exp"]
+        fit_kw : dict
+            Arguments to pass to the fitting of the background distribution.
+        TSval : array-like (m, )
+            TS value to use for calculation, skips background fitting, and
+            alpha obsolete.
+        eps : float
+            Precision for breaking point.
+
+        """
+
+        def do_estimation(TSval, beta, trials):
+            r"""Perform sensitivity estimation by varying the injected source
+            strength until the scrambling yields a test statistic with the
+            wanted value of *beta*.
+
+            """
+
+            print("\tTS    = {0:6.2f}\n".format(TSval) +
+                  "\tbeta  = {0:7.2%}".format(beta))
+            print()
+
+            if (len(trials) < 1 or (not np.any(trials["n_inj"] > 0))
+                    or (not np.any(trials["TS"][trials["n_inj"] > 0]
+                        > 2. * TSval))):
+                # if no events have been injected, do quick estimation
+                # of active region by doing a few trials
+
+                # start with first number of trials that was never used before
+                if len(trials) < 1:
+                    n_inj = 0
+                else:
+                    n_inj = np.bincount(trials["n_inj"])
+                    n_inj = (len(n_inj) if np.all(n_inj > 0)
+                                        else np.where(n_inj < 1)[0][0])
+
+                print("Quick estimate of active region, "
+                      "inject increasing number of events "
+                      "starting with {0:d} events...".format(n_inj + 1))
+
+                n_inj = int(np.mean(trials["n_inj"])) if len(trials) > 0 else 0
+                while True:
+                    n_inj, sample = inj.sample(src_map, n_inj + 1, dec_bins, poisson=False).next()
+
+                    TS_i, xmin_i = self.fit_extended_source(template_map, sigma_bins,
+                                                            inject=sample,
+                                                            scramble=True)
+
+                    trial_i = np.empty((1, ), dtype=trials.dtype)
+                    trial_i["n_inj"] = n_inj
+                    trial_i["TS"] = TS_i
+                    for par in self.params:
+                        trial_i[par] = xmin_i[par]
+
+                    trials = np.append(trials, trial_i)
+
+                    mTS = np.bincount(trials["n_inj"], weights=trials["TS"])
+                    mW = np.bincount(trials["n_inj"])
+                    mTS[mW > 0] /= mW[mW > 0]
+
+                    resid = mTS - TSval
+
+                    if (float(np.count_nonzero(resid > 0)) / len(resid) > beta
+                        or np.all(resid > 0)):
+                        mu_eff = len(mTS) * beta
+
+                        break
+
+                print("\tActive region: {0:5.1f}".format(mu_eff))
+                print()
+
+                # do trials around active region
+                trials = np.append(trials,
+                                   self.do_extended_trials(template_map, sigma_bins, n_iter=n_iter,
+                                                           mu=inj.sample(src_map, mu_eff, dec_bins),
+                                                           **kwargs))
+
+
+            # start estimation
+            i = 1
+            while True:
+                # use existing scrambles to determine best starting point
+                fun = lambda n: np.log10(
+                                    (utils.poisson_percentile(n,
+                                                              trials["n_inj"],
+                                                              trials["TS"],
+                                                              TSval)[0]
+                                     - beta)**2)
+
+                # fit values in region where sampled before
+                bounds = np.percentile(trials["n_inj"][trials["n_inj"] > 0],
+                                       [_ub_perc, 100. - _ub_perc])
+
+                if bounds[0] == 1:
+                    bounds[0] = (float(np.count_nonzero(trials["n_inj"] == 1))
+                                    / np.sum(trials["n_inj"] < 2))
+
+                print("\tEstimate sens. in region {0:5.1f} to {1:5.1f}".format(
+                            *bounds))
+
+                # get best starting point
+                ind = np.argmin([fun(n_i) for n_i in np.arange(0., bounds[-1])])
+
+                # fit closest point to beta value
+                x, f, info = scipy.optimize.fmin_l_bfgs_b(
+                                    fun, [ind], bounds=[bounds],
+                                    approx_grad=True)
+
+                mu_eff = np.asscalar(x)
+
+                # get the statistical uncertainty of the quantile
+                b, b_err = utils.poisson_percentile(mu_eff, trials["n_inj"],
+                                                    trials["TS"], TSval)
+
+                print("\t\tBest estimate: "
+                      "{0:6.2f}, ({1:7.2%} +/- {2:8.3%})".format(mu_eff,
+                                                                 b, b_err))
+
+                # if precision is high enough and fit did converge,
+                # the wanted values is reached, stop trial computation
+                if (i > 1 and b_err < eps
+                        and mu_eff > bounds[0] and mu_eff < bounds[-1]
+                        and np.fabs(b - beta) < eps):
+                    break
+
+                # to avoid a spiral with too few events we want only half
+                # of all events to be background scrambles after iterations
+                p_bckg = np.sum(trials["n_inj"] == 0,
+                                dtype=np.float) / len(trials)
+                mu_eff_min = np.log(1. / (1. - p_bckg))
+                mu_eff = np.amax([mu_eff, mu_eff_min])
+
+                print("\tDo {0:6d} trials with mu = {1:6.2f} events".format(
+                            n_iter, mu_eff))
+
+                # do trials with best estimate
+                trials = np.append(trials, self.do_extended_trials(
+                    template_map, sigma_bins, mu=inj.sample(src_map, mu_eff, dec_bins), n_iter=n_iter, **kwargs))
+
+                sys.stdout.flush()
+
+                i += 1
+
+            # save all trials
+
+            return mu_eff, trials
+
+        start = time.time()
+
+        # configuration
+        n_bckg = int(kwargs.pop("n_bckg", _n_trials))
+        n_iter = int(kwargs.pop("n_iter", _n_iter))
+        eps = kwargs.pop("eps", _eps)
+        fit = kwargs.pop("fit", None)
+
+        if fit is not None and not hasattr(fit, "isf"):
+            raise AttributeError("fit must have attribute 'isf(alpha)'!")
+
+        # all input values as lists
+        alpha = np.atleast_1d(alpha)
+        beta = np.atleast_1d(beta)
+        TSval = np.atleast_1d(kwargs.pop("TSval", [None for i in alpha]))
+        if not (len(alpha) == len(beta) == len(TSval)):
+            raise ValueError("alpha, beta, and (if given) TSval must have "
+                             " same length!")
+
+        # setup source injector
+        inj.fill(mc, self.livetime, dec_bins)
+
+        # result list
+        TS = list()
+        mu_flux = list()
+        flux = list()
+        trials = np.empty((0, ), dtype=[("n_inj", np.int), ("TS", np.float)]
+                                       + [(par, np.float)
+                                          for par in self.params])
+
+        for i, (TSval_i, alpha_i, beta_i) in enumerate(zip(TSval, alpha, beta)):
+
+            if TSval_i is None:
+                # Need to calculate TS value for given alpha values
+                if fit == None:
+                    # No parametrization of background given, do scrambles
+                    print("\tDo background scrambles for estimation of "
+                          "TS value for alpha = {0:7.2%}".format(alpha_i))
+
+                    trials = np.append(trials,
+                                       self.do_extended_trials(template_map, sigma_bins,
+                                                               n_iter=n_bckg,
+                                                               **kwargs))
 
                     stop = time.time()
                     mins, secs = divmod(stop - start, 60)

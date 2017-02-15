@@ -95,6 +95,8 @@ def rotate_struct(ev, ra, dec):
     if "dec" in names:
         rot["dec"] = rot_dec
     rot["sinDec"] = np.sin(rot_dec)
+    #rot['ra']  = ra
+    #rot['sinDec'] = np.sin(dec)
 
     # "delete" Monte Carlo information from sampled events
     mc = ["trueRa", "trueDec", "trueE", "ow"]
@@ -728,7 +730,7 @@ class TemplateInjector(Injector):
         self.mc = dict()
         self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
                                          ("trueE", np.float), ("ow", np.float),
-                                         ("dec_bin", np.int)])
+                                         ("dec_bin", np.int), ("sinDec", np.float), ("trueDec", np.float)])
 
         if not isinstance(mc, dict):
             mc = {-1: mc}
@@ -755,7 +757,8 @@ class TemplateInjector(Injector):
             mc_arr["enum"] = key * np.ones(N)
             mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
             mc_arr["trueE"] = self.mc[key]["trueE"]
-
+            mc_arr["sinDec"] = self.mc[key]["sinDec"]
+            mc_arr["trueDec"] = self.mc[key]["trueDec"]
             mc_arr["dec_bin"] = np.digitize(self.mc[key]["sinDec"], sinDec_bins)
 
             self.mc_arr = np.append(self.mc_arr, mc_arr)
@@ -875,7 +878,7 @@ class TemplateInjector(Injector):
             for enum in enums:
                 idx = sam_idx[sam_idx["enum"] == enum]["idx"]
                 sam_ev_i = np.copy(self.mc[enum][idx])
-                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra, self.src_dec)
+                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra, src_dec)
 
             yield num, sam_ev
 

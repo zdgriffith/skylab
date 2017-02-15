@@ -384,8 +384,7 @@ class ClassicLLH(NullModel):
         """
 
         bin_vals = np.digitize(ev['sigma'], sigma_bins)
-        sig_pdf = np.load(template_map)
-        npix    = len(sig_pdf[0])
+        npix    = len(template_map[0])
         nside   = hp.npix2nside(npix)
         pix     = hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
         indices = np.arange(npix)
@@ -393,17 +392,15 @@ class ClassicLLH(NullModel):
 
         for i, sbin in enumerate(sigma_bins):
             mask = np.equal(bin_vals, i)
-            vals = np.take(sig_pdf[i], pix[mask])
+            vals = np.take(template_map[i], pix[mask])
             for j, index in enumerate(indices[mask]):
                 signal_vals[index] += vals[j]
 
-        #return  np.take(sig_pdf, pix)
-        return 1.02*2*signal_vals 
+        return signal_vals 
         
-    def signal_sc(self, scrambled_map, ev):
+    def signal_sc(self, sig_pdf, ev):
         bin_size = 0.02
         dec_bins = np.arange(-1, -0.78, bin_size)
-        sig_pdf  = np.load(scrambled_map)
         nside    = hp.npix2nside(len(sig_pdf))
 
         npix     = hp.nside2npix(nside)
