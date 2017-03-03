@@ -95,8 +95,6 @@ def rotate_struct(ev, ra, dec):
     if "dec" in names:
         rot["dec"] = rot_dec
     rot["sinDec"] = np.sin(rot_dec)
-    #rot['ra']  = ra
-    #rot['sinDec'] = np.sin(dec)
 
     # "delete" Monte Carlo information from sampled events
     mc = ["trueRa", "trueDec", "trueE", "ow"]
@@ -809,7 +807,7 @@ class TemplateInjector(Injector):
                     * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
                     * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
 
-    def sample(self, template, mean_mu, sinDec_bins, poisson=True):
+    def sample(self, template, mean_mu, sinDec_bins, poisson=True, coords = 'equatorial'):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
@@ -850,8 +848,14 @@ class TemplateInjector(Injector):
             npix    = hp.nside2npix(nside)
             src_pix = self.random.choice(npix, size=num, p=template)
 
-            dec, src_ra = hp.pix2ang(nside, src_pix)
-            src_dec     = np.pi/2. - dec
+            if coords == 'galactic':
+                theta_gal, phi_gal = hp.pix2ang(nside, src_pix)
+                theta_eq, phi_eq   = hp.Rotator(coord = ['G','C'], rot = [0,0])(theta_gal, phi_gal)
+                src_dec            = np.pi/2. - theta_eq 
+                src_ra             = phi_eq - np.pi
+            else:
+                theta_eq, src_ra = hp.pix2ang(nside, src_pix)
+                src_dec          = np.pi/2. - theta_eq 
 
             sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
             keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
@@ -860,7 +864,7 @@ class TemplateInjector(Injector):
             for i, dec in enumerate(src_dec):
                 mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
                 probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
-                sam     = self.random.choice(self.mc_arr[mask], p=probs)
+                sam   = self.random.choice(self.mc_arr[mask], p=probs)
                 for key in keys:
                     sam_idx[key][i] = sam[key]
 

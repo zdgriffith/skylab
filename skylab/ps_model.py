@@ -114,6 +114,13 @@ class NullModel(object):
         """
         self.__raise__()
 
+    def extended_background(self, *args, **kwargs):
+        r"""Calculation of the background probability *B* in the point source
+        likelihood, mainly a spatial dependent term.
+
+        """
+        self.__raise__()
+
     def signal_sc(self, *args, **kwargs):
         r"""Calculation of the right ascension scrambled signal acceptance for
         background subtraction
@@ -317,6 +324,15 @@ class ClassicLLH(NullModel):
         """
         return 1. / 2. / np.pi * np.exp(self.bckg_spline(ev["sinDec"]))
 
+    def extended_background(self, ev, background):
+
+        npix         = len(background)
+        nside        = hp.npix2nside(npix)
+        r                  = hp.Rotator(coord = ['C','G'], rot = [0,0])
+        theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
+        pix                = hp.ang2pix(nside, theta_gal, phi_gal)
+        return np.take(background, pix)
+
     def effA(self, dec, **params):
         r"""Calculate integrated effective Area at declination for distributing
         source events among different samples.
@@ -366,7 +382,7 @@ class ClassicLLH(NullModel):
         return (1./2./np.pi/ev["sigma"]**2
                 * np.exp(-dist**2 / 2. / ev["sigma"]**2))
 
-    def extended_signal(self, template_map, sigma_bins, ev):
+    def extended_signal(self, template_map, sigma_bins, ev, coords = 'equatorial'):
         r"""Calculates signal probabilities for each event
         from a template source map
 
@@ -383,41 +399,49 @@ class ClassicLLH(NullModel):
 
         """
 
-        bin_vals = np.digitize(ev['sigma'], sigma_bins)
-        npix    = len(template_map[0])
-        nside   = hp.npix2nside(npix)
-        pix     = hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
-        indices = np.arange(npix)
-        signal_vals = np.zeros(npix) 
+        if template_map.ndim == 1:
+            #Only one map, sample straight from it
+            npix         = len(template_map)
+            nside        = hp.npix2nside(npix)
+            r                  = hp.Rotator(coord = ['C','G'], rot = [0,0])
+            theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
+            pix                = hp.ang2pix(nside, theta_gal, phi_gal)
+            return np.take(template_map, pix)
 
-        for i, sbin in enumerate(sigma_bins):
-            mask = np.equal(bin_vals, i)
-            vals = np.take(template_map[i], pix[mask])
-            for j, index in enumerate(indices[mask]):
-                signal_vals[index] += vals[j]
+        else:
+            bin_nums    = np.digitize(np.degrees(ev['sigma']), sigma_bins)-1
+            if np.any(np.less(bin_nums,0)):
+                #There are sigma values smaller than your bin range! Events will use smallest sigma bin.
+                bin_nums[bin_nums < 0] = 0
 
-        return signal_vals 
-        
-    def signal_sc(self, sig_pdf, ev):
-        bin_size = 0.02
-        dec_bins = np.arange(-1, -0.78, bin_size)
-        nside    = hp.npix2nside(len(sig_pdf))
+            npix        = len(template_map[0])
+            nside       = hp.npix2nside(npix)
+            indices     = np.arange(len(ev['sigma']))
+            signal_vals = np.zeros(len(ev['sigma'])) 
 
-        npix     = hp.nside2npix(nside)
-        dec, ra  = hp.pix2ang(nside, range(npix))
-        dec      = np.pi/2. - dec
-
-        vals, bins = np.histogram(np.sin(dec), bins = dec_bins, weights = sig_pdf/(np.sum(sig_pdf)*bin_size*2*np.pi))
-        bin_vals   = np.digitize(ev['sinDec'], dec_bins, right = True)
-        new_vals = []
-        for val in bin_vals:
-            if val > len(vals) -1:
-                new_vals.append(len(vals)-1)
+            if coords == 'galactic':
+                r   = hp.Rotator(coord = ['C','G'], rot = [0,0])
+                theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
+                pix = hp.ang2pix(nside, theta_gal, phi_gal)
             else:
-                new_vals.append(val)
-                
-        return np.take(vals, np.array(new_vals))
+                pix = hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
 
+            for i, sbin in enumerate(sigma_bins):
+                mask = np.equal(bin_nums, i)
+                vals = np.take(template_map[i], pix[mask])
+                for j, index in enumerate(indices[mask]):
+                    signal_vals[index] += vals[j]
+
+            return signal_vals 
+        
+    def signal_sc(self, template_map, ev, coords = 'equatorial'):
+        npix         = len(template_map)
+        nside        = hp.npix2nside(npix)
+        r                  = hp.Rotator(coord = ['C','G'], rot = [0,0])
+        theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
+        pix                = hp.ang2pix(nside, theta_gal, phi_gal)
+        return np.take(template_map, pix)
+        
     def weight(self, ev, **params):
         r"""For classicLLH, no weighting of events
 
