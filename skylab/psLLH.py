@@ -1951,7 +1951,7 @@ class PointSourceLLH(object):
 
         return result
 
-    def extended_sensitivity(self, template_map, src_map, sigma_bins, dec_bins, alpha, beta, inj, mc, coords = 'equatorial', **kwargs):
+    def extended_sensitivity(self, template_map, src_map, src_ra_map, sigma_bins, dec_bins, alpha, beta, inj, mc, coords = 'equatorial', **kwargs):
         """Calculate extended source sensitivity for a given source
         hypothesis using weights.
 
@@ -2046,10 +2046,10 @@ class PointSourceLLH(object):
 
                 n_inj = int(np.mean(trials["n_inj"])) if len(trials) > 0 else 0
                 while True:
-                    n_inj, sample = inj.sample(src_map, n_inj + 1, dec_bins, poisson=False).next()
+                    n_inj, sample = inj.sample(src_map, n_inj + 1, dec_bins, coords = coords, poisson=False).next()
 
                     TS_i, xmin_i = self.fit_extended_source(template_map, sigma_bins,
-                                                            src_map = src_map,
+                                                            src_map = src_ra_map,
                                                             coords = coords,
                                                             inject=sample,
                                                             scramble=True)
@@ -2080,9 +2080,9 @@ class PointSourceLLH(object):
                 # do trials around active region
                 trials = np.append(trials,
                                    self.do_extended_trials(template_map, sigma_bins, n_iter=n_iter,
-                                                           src_map = src_map,
+                                                           src_map = src_ra_map,
                                                            coords  = coords,
-                                                           mu=inj.sample(src_map, mu_eff, dec_bins),
+                                                           mu=inj.sample(src_map, mu_eff, dec_bins, coords = coords),
                                                            **kwargs))
 
 
@@ -2146,9 +2146,9 @@ class PointSourceLLH(object):
                 # do trials with best estimate
                 trials = np.append(trials, self.do_extended_trials(
                     template_map, sigma_bins,
-                    src_map = src_map,
+                    src_map = src_ra_map,
                     coords  = coords, 
-                    mu=inj.sample(src_map, mu_eff, dec_bins), n_iter=n_iter, **kwargs))
+                    mu=inj.sample(src_map, mu_eff, dec_bins, coords = coords), n_iter=n_iter, **kwargs))
 
                 sys.stdout.flush()
 

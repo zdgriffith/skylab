@@ -859,6 +859,8 @@ class TemplateInjector(Injector):
 
             sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
             keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
+            print(np.sin(src_dec))
+            print(sinDec_bins)
             dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
 
             for i, dec in enumerate(src_dec):
