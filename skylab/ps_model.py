@@ -324,13 +324,8 @@ class ClassicLLH(NullModel):
         """
         return 1. / 2. / np.pi * np.exp(self.bckg_spline(ev["sinDec"]))
 
-    def extended_background(self, ev, background):
-
-        npix         = len(background)
-        nside        = hp.npix2nside(npix)
-        r                  = hp.Rotator(coord = ['C','G'], rot = [0,0])
-        theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
-        pix                = hp.ang2pix(nside, theta_gal, phi_gal)
+    def extended_background(self, ev, background, coords = 'equatorial'):
+        pix = self.get_pix(ev, background, coords)
         return np.take(background, pix)
 
     def effA(self, dec, **params):
@@ -382,6 +377,40 @@ class ClassicLLH(NullModel):
         return (1./2./np.pi/ev["sigma"]**2
                 * np.exp(-dist**2 / 2. / ev["sigma"]**2))
 
+    def get_pix(self, ev, m, coords = 'equatorial'):
+        r"""Calculates healpix pixel for each event
+
+        Parameters
+        -----------
+        ev : structured array
+            Event array, import information: sinDec, ra, sigma
+        m : map or array of maps in healpix array format
+        coords : string
+            Can be either equatorial or galactic
+
+        Returns
+        --------
+        pix : array-like
+            Array of event pixels in healpix map
+
+        """
+
+        # get number of pixels in map
+        if m.ndim == 1: npix = len(m)
+        else:           npix = len(m[0])
+
+        # calculate nside of map
+        nside = hp.npix2nside(npix)
+
+        # rotate to galactic coords when desired
+        if coords == 'galactic':
+          r = hp.Rotator(coord = ['C','G'], rot = [0,0])
+          theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
+          return hp.ang2pix(nside, theta_gal, phi_gal)
+
+        # otherwise return pix in equatorial coords
+        return hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
+
     def extended_signal(self, template_map, sigma_bins, ev, coords = 'equatorial'):
         r"""Calculates signal probabilities for each event
         from a template source map
@@ -399,13 +428,10 @@ class ClassicLLH(NullModel):
 
         """
 
+        pix = self.get_pix(ev, template_map, coords)
+
         if template_map.ndim == 1:
             #Only one map, sample straight from it
-            npix         = len(template_map)
-            nside        = hp.npix2nside(npix)
-            r                  = hp.Rotator(coord = ['C','G'], rot = [0,0])
-            theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
-            pix                = hp.ang2pix(nside, theta_gal, phi_gal)
             return np.take(template_map, pix)
 
         else:
@@ -414,17 +440,8 @@ class ClassicLLH(NullModel):
                 #There are sigma values smaller than your bin range! Events will use smallest sigma bin.
                 bin_nums[bin_nums < 0] = 0
 
-            npix        = len(template_map[0])
-            nside       = hp.npix2nside(npix)
             indices     = np.arange(len(ev['sigma']))
-            signal_vals = np.zeros(len(ev['sigma'])) 
-
-            if coords == 'galactic':
-                r   = hp.Rotator(coord = ['C','G'], rot = [0,0])
-                theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
-                pix = hp.ang2pix(nside, theta_gal, phi_gal)
-            else:
-                pix = hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
+            signal_vals = np.zeros(len(ev['sigma']))
 
             for i, sbin in enumerate(sigma_bins):
                 mask = np.equal(bin_nums, i)
@@ -432,16 +449,12 @@ class ClassicLLH(NullModel):
                 for j, index in enumerate(indices[mask]):
                     signal_vals[index] += vals[j]
 
-            return signal_vals 
-        
+            return signal_vals
+
     def signal_sc(self, template_map, ev, coords = 'equatorial'):
-        npix         = len(template_map)
-        nside        = hp.npix2nside(npix)
-        r                  = hp.Rotator(coord = ['C','G'], rot = [0,0])
-        theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
-        pix                = hp.ang2pix(nside, theta_gal, phi_gal)
+        pix = self.get_pix(ev, template_map, coords)
         return np.take(template_map, pix)
-        
+
     def weight(self, ev, **params):
         r"""For classicLLH, no weighting of events
 

@@ -204,8 +204,8 @@ class PointSourceLLH(object):
     _src_ra = _src_ra
     _src_dec = _src_dec
 
-    def __init__(self, exp, mc, livetime,
-                 scramble=True, upscale=False, background = None,**kwargs):
+    def __init__(self, exp, mc, livetime, scramble=True, upscale=False,
+                 background = None, coords = 'equatorial', **kwargs):
         r"""Constructor of `PointSourceLikelihood`.
 
         Fill the class with data and all necessary configuration.
@@ -221,6 +221,8 @@ class PointSourceLLH(object):
             creation of weighting splines that need signal information.
         livetime : float
             Livetime of experimental data.
+        coords : string
+            Coordinate system where we perform the analysis
 
         Other Parameters
         ----------------
@@ -316,7 +318,7 @@ class PointSourceLLH(object):
         # background probability will not change, calculate now
         if background is not None:
             self.exp = numpy.lib.recfunctions.append_fields(
-                self.exp, "B", self.llh_model.extended_background(self.exp, background),
+                self.exp, "B", self.llh_model.extended_background(self.exp, background, coords),
                 usemask=False)
         else:
             self.exp = numpy.lib.recfunctions.append_fields(
@@ -1395,7 +1397,7 @@ class PointSourceLLH(object):
         return fmin, xmin
 
     def fit_extended_source(self, template_map, sigma_bins, src_map = None, coords = 'equatorial', **kwargs):
-        """Minimize the negative log-Likelihood using a source template 
+        """Minimize the negative log-Likelihood using a source template
 
         Parameters
         ----------
@@ -1473,7 +1475,7 @@ class PointSourceLLH(object):
                 self._ev = np.append(self._ev,
                                      numpy.lib.recfunctions.append_fields(
                                         inject, "B",
-                                        self.llh_model.extended_background(inject, self.background),
+                                        self.llh_model.extended_background(inject, self.background, coords),
                                         usemask=False))
             else:
                 self._ev = np.append(self._ev,
@@ -2147,7 +2149,7 @@ class PointSourceLLH(object):
                 trials = np.append(trials, self.do_extended_trials(
                     template_map, sigma_bins,
                     src_map = src_ra_map,
-                    coords  = coords, 
+                    coords  = coords,
                     mu=inj.sample(src_map, mu_eff, dec_bins, coords = coords), n_iter=n_iter, **kwargs))
 
                 sys.stdout.flush()
