@@ -29,8 +29,6 @@ import numpy as np
 import scipy.interpolate
 from scipy.stats import norm
 
-import healpy as hp
-
 # local package imports
 from . import set_pars
 from .utils import kernel_func
@@ -114,31 +112,9 @@ class NullModel(object):
         """
         self.__raise__()
 
-    def extended_background(self, *args, **kwargs):
-        r"""Calculation of the background probability *B* in the point source
-        likelihood, mainly a spatial dependent term.
-
-        """
-        self.__raise__()
-
-    def signal_sc(self, *args, **kwargs):
-        r"""Calculation of the right ascension scrambled signal acceptance for
-        background subtraction
-
-        """
-
-        self.__raise__()
-
     def signal(self, *args, **kwargs):
         r"""Calculation of the signal probability *S* in the point source
         likelihood, mainly a spatial dependent term.
-
-        """
-        self.__raise__()
-
-    def extended_signal(self, *args, **kwargs):
-        r"""Calculation of the signal probability *S* for an extended source
-        , mainly a spatial dependent term.
 
         """
         self.__raise__()
@@ -322,11 +298,11 @@ class ClassicLLH(NullModel):
             at *sinDec*
 
         """
-        return 1. / 2. / np.pi * np.exp(self.bckg_spline(ev["sinDec"]))
 
-    def extended_background(self, ev, background, coords = 'equatorial'):
-        pix = self.get_pix(ev, background, coords)
-        return np.take(background, pix)
+        try:
+            return 1. / 2. / np.pi * np.exp(self.bckg_spline(ev["sinDec"]))
+        except:
+            return 1. / 2. / np.pi * np.exp(self.bckg_spline(ev))
 
     def effA(self, dec, **params):
         r"""Calculate integrated effective Area at declination for distributing
@@ -347,7 +323,7 @@ class ClassicLLH(NullModel):
         """
         return
 
-    def signal(self, src_ra, src_dec, ev):
+    def signal(self, src_ra, src_dec, src_weights, src_err, ev):
         r"""Spatial distance between source position and events
 
         Signal is assumed to cluster around source position.
@@ -365,95 +341,51 @@ class ClassicLLH(NullModel):
             Spatial signal probability for each event
 
         """
-        cos_ev = np.sqrt(1. - ev["sinDec"]**2)
-        cosDist = (np.cos(src_ra - ev["ra"])
-                            * np.cos(src_dec) * cos_ev
-                          + np.sin(src_dec) * ev["sinDec"])
 
-        # handle possible floating precision errors
-        cosDist[np.isclose(cosDist, 1.) & (cosDist > 1)] = 1.
-        dist = np.arccos(cosDist)
+        if np.isscalar(src_ra):
+            cos_ev = np.sqrt(1. - ev["sinDec"]**2)
+            cosDist = (np.cos(src_ra - ev["ra"])
+                                * np.cos(src_dec) * cos_ev
+                              + np.sin(src_dec) * ev["sinDec"])
 
-        return (1./2./np.pi/ev["sigma"]**2
-                * np.exp(-dist**2 / 2. / ev["sigma"]**2))
+            # handle possible floating precision errors
+            cosDist[np.isclose(cosDist, 1.) & (cosDist > 1)] = 1.
+            dist  = np.arccos(cosDist)
+            sigma = np.sqrt(src_err**2 + ev['sigma']**2)
 
-    def get_pix(self, ev, m, coords = 'equatorial'):
-        r"""Calculates healpix pixel for each event
-
-        Parameters
-        -----------
-        ev : structured array
-            Event array, import information: sinDec, ra, sigma
-        m : map or array of maps in healpix array format
-        coords : string
-            Can be either equatorial or galactic
-
-        Returns
-        --------
-        pix : array-like
-            Array of event pixels in healpix map
-
-        """
-
-        # get number of pixels in map
-        if m.ndim == 1: npix = len(m)
-        else:           npix = len(m[0])
-
-        # calculate nside of map
-        nside = hp.npix2nside(npix)
-
-        # rotate to galactic coords when desired
-        if coords == 'galactic':
-          r = hp.Rotator(coord = ['C','G'], rot = [0,0])
-          theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
-          return hp.ang2pix(nside, theta_gal, phi_gal)
-
-        # otherwise return pix in equatorial coords
-        return hp.ang2pix(nside, np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
-
-    def extended_signal(self, template_map, sigma_bins, ev, coords = 'equatorial'):
-        r"""Calculates signal probabilities for each event
-        from a template source map
-
-        Parameters
-        -----------
-        ev : structured array
-            Event array, import information: sinDec, ra, sigma
-        template_map:  source map in healpix array format
-
-        Returns
-        --------
-        P : array-like
-            Spatial signal probability for each event
-
-        """
-
-        pix = self.get_pix(ev, template_map, coords)
-
-        if template_map.ndim == 1:
-            #Only one map, sample straight from it
-            return np.take(template_map, pix)
-
+            return (1./2./np.pi/sigma**2
+                    * np.exp(-dist**2 / 2. / sigma**2))
         else:
-            bin_nums    = np.digitize(np.degrees(ev['sigma']), sigma_bins)-1
-            if np.any(np.less(bin_nums,0)):
-                #There are sigma values smaller than your bin range! Events will use smallest sigma bin.
-                bin_nums[bin_nums < 0] = 0
+            cos_ev  = np.sqrt(1. - ev["sinDec"]**2)
+            cosDist = (np.cos(src_ra[:, np.newaxis] - ev["ra"])
+                                * np.cos(src_dec[:, np.newaxis]) * cos_ev
+                              + np.sin(src_dec[:, np.newaxis]) * ev["sinDec"])
 
-            indices     = np.arange(len(ev['sigma']))
-            signal_vals = np.zeros(len(ev['sigma']))
+            # handle possible floating precision errors
+            cosDist[np.isclose(cosDist, 1.) & (cosDist > 1)] = 1.
+            dist  = np.arccos(cosDist)
+            sigma = np.sqrt(src_err[:, np.newaxis]**2 + ev['sigma']**2)
 
-            for i, sbin in enumerate(sigma_bins):
-                mask = np.equal(bin_nums, i)
-                vals = np.take(template_map[i], pix[mask])
-                for j, index in enumerate(indices[mask]):
-                    signal_vals[index] += vals[j]
+            S     = src_weights[:, np.newaxis]*(1./2./np.pi/sigma**2
+                                * np.exp(-dist**2 / 2. / sigma**2))
 
-            return signal_vals
+            '''
+            S = np.zeros((len(src_ra), len(ev['ra'])))
+            for i, w in enumerate(src_weights):
+                cos_ev  = np.sqrt(1. - ev["sinDec"]**2)
+                cosDist = (np.cos(src_ra[i] - ev["ra"])
+                                    * np.cos(src_dec[i]) * cos_ev
+                                  + np.sin(src_dec[i]) * ev["sinDec"])
 
-    def signal_sc(self, template_map, ev, coords = 'equatorial'):
-        pix = self.get_pix(ev, template_map, coords)
-        return np.take(template_map, pix)
+                # handle possible floating precision errors
+                cosDist[np.isclose(cosDist, 1.) & (cosDist > 1)] = 1.
+                dist  = np.arccos(cosDist)
+                sigma = np.sqrt(src_err[i]**2 + ev['sigma']**2)
+
+                S[i] += w*(1./2./np.pi/sigma**2
+                           * np.exp(-dist**2 / 2. / sigma**2))
+            '''
+            return np.sum(S, axis = 0)
 
     def weight(self, ev, **params):
         r"""For classicLLH, no weighting of events

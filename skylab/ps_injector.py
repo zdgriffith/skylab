@@ -42,7 +42,6 @@ import numpy as np
 from numpy.lib.recfunctions import drop_fields
 import scipy.interpolate
 
-import healpy as hp
 
 # local package imports
 from . import set_pars
@@ -295,22 +294,25 @@ class PointSourceInjector(Injector):
     @property
     def src_dec(self):
         return self._src_dec
+    
 
     @src_dec.setter
     def src_dec(self, val):
-        if not np.fabs(val) < np.pi / 2.:
+        if not np.all(np.fabs(val) < np.pi / 2.):
             logger.warn("Source declination {0:2e} not in pi range".format(
                             val))
             return
-        if not (np.sin(val) > self.sinDec_range[0]
-                and np.sin(val) < self.sinDec_range[1]):
+        if not (np.all(np.sin(val) > self.sinDec_range[0])
+                and np.all(np.sin(val) < self.sinDec_range[1])):
             logger.error("Injection declination not in sinDec_range!")
-        self._src_dec = float(val)
+
+        self._src_dec = np.atleast_1d(val).astype(float)
 
         self._setup()
 
         return
 
+    
     def _setup(self):
         r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
         angles and declination bands have to be re-set.
@@ -324,8 +326,8 @@ class PointSourceInjector(Injector):
 
         sinDec = m * np.sin(self.src_dec) + b
 
-        min_sinDec = max(A, sinDec - self.sinDec_bandwidth)
-        max_sinDec = min(B, sinDec + self.sinDec_bandwidth)
+        min_sinDec = np.maximum(A, sinDec - self.sinDec_bandwidth)
+        max_sinDec = np.minimum(B, sinDec + self.sinDec_bandwidth)
 
         self._min_dec = np.arcsin(min_sinDec)
         self._max_dec = np.arcsin(max_sinDec)
@@ -407,7 +409,7 @@ class PointSourceInjector(Injector):
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
             print("Sample {0:s}: Selected {1:6d} events at {2:7.2f}deg".format(
-                        str(key), N, np.degrees(self.src_dec)))
+                        str(key), N, float(np.degrees(self.src_dec))))
 
         if len(self.mc_arr) < 1:
             raise ValueError("Select no events at all")
@@ -499,7 +501,6 @@ class PointSourceInjector(Injector):
             if len(enums) == 1 and enums[0] < 0:
                 # only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
-                print(sam_ev)
 
                 yield num, rotate_struct(sam_ev, src_ra, self.src_dec)
                 continue
@@ -512,381 +513,6 @@ class PointSourceInjector(Injector):
 
             yield num, sam_ev
 
-class TemplateInjector(Injector):
-    r"""Class to inject MC from a source template to an event sample.
-
-    """
-    _src_dec = np.nan
-    _sinDec_bandwidth = 0.1
-    _sinDec_range = [-1., 1.]
-
-    _E0 = 1.
-    _GeV = 1.e3
-    _e_range = [0., np.inf]
-
-    _random = np.random.RandomState()
-    _seed = None
-
-    def __init__(self, gamma, **kwargs):
-        r"""Constructor. Initialize the Injector class with basic
-        characteristics regarding a point source.
-
-        Parameters
-        -----------
-        gamma : float
-            Spectral index, positive values for falling spectra
-
-        kwargs : dict
-            Set parameters of class different to default
-
-        """
-
-        # source properties
-        self.gamma = gamma
-
-        # Set all other attributes passed to the class
-        set_pars(self, **kwargs)
-
-        return
-
-    def __str__(self):
-        r"""String representation showing some more or less useful information
-        regarding the Injector class.
-
-        """
-        sout = ("\n{0:s}\n"+
-                67*"-"+"\n"+
-                "\tSpectral index     : {1:6.2f}\n"+
-                "\tSource declination : {2:5.1f} deg\n"
-                "\tlog10 Energy range : {3:5.1f} to {4:5.1f}\n").format(
-                         self.__repr__(),
-                         self.gamma, np.degrees(self.src_dec),
-                         *self.e_range)
-        sout += 67*"-"
-
-        return sout
-
-    @property
-    def sinDec_range(self):
-        return self._sinDec_range
-
-    @sinDec_range.setter
-    def sinDec_range(self, val):
-        if len(val) != 2:
-            raise ValueError("SinDec range needs only upper and lower bound!")
-        if val[0] < -1 or val[1] > 1:
-            logger.warn("SinDec bounds out of [-1, 1], clip to that values")
-            val[0] = max(val[0], -1)
-            val[1] = min(val[1], 1)
-        if np.diff(val) <= 0:
-            raise ValueError("SinDec range has to be increasing")
-        self._sinDec_range = [float(val[0]), float(val[1])]
-        return
-
-    @property
-    def e_range(self):
-        return self._e_range
-
-    @e_range.setter
-    def e_range(self, val):
-        if len(val) != 2:
-            raise ValueError("Energy range needs upper and lower bound!")
-        if val[0] < 0. or val[1] < 0:
-            logger.warn("Energy range has to be non-negative")
-            val[0] = max(val[0], 0)
-            val[1] = max(val[1], 0)
-        if np.diff(val) <= 0:
-            raise ValueError("Energy range has to be increasing")
-        self._e_range = [float(val[0]), float(val[1])]
-        return
-
-    @property
-    def GeV(self):
-        return self._GeV
-
-    @GeV.setter
-    def GeV(self, value):
-        self._GeV = float(value)
-
-        return
-
-    @property
-    def E0(self):
-        return self._E0
-
-    @E0.setter
-    def E0(self, value):
-        self._E0 = float(value)
-
-        return
-
-    @property
-    def random(self):
-        return self._random
-
-    @random.setter
-    def random(self, value):
-        self._random = value
-
-        return
-
-    @property
-    def seed(self):
-        return self._seed
-
-    @seed.setter
-    def seed(self, val):
-        logger.info("Setting global seed to {0:d}".format(int(val)))
-        self._seed = int(val)
-        self.random = np.random.RandomState(self.seed)
-
-        return
-
-    @property
-    def sinDec_bandwidth(self):
-        return self._sinDec_bandwidth
-
-    @sinDec_bandwidth.setter
-    def sinDec_bandwidth(self, val):
-        if val < 0. or val > 1:
-            logger.warn("Sin Declination bandwidth {0:2e} not valid".format(
-                            val))
-            val = min(1., np.fabs(val))
-        self._sinDec_bandwidth = float(val)
-
-        self._setup()
-
-        return
-
-    @property
-    def src_dec(self):
-        return self._src_dec
-
-    @src_dec.setter
-    def src_dec(self, val):
-        if not np.fabs(val) < np.pi / 2.:
-            logger.warn("Source declination {0:2e} not in pi range".format(
-                            val))
-            return
-        if not (np.sin(val) > self.sinDec_range[0]
-                and np.sin(val) < self.sinDec_range[1]):
-            logger.error("Injection declination not in sinDec_range!")
-        self._src_dec = float(val)
-
-        self._setup()
-
-        return
-
-    def _setup(self):
-        r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
-        angles and declination bands have to be re-set.
-
-        """
-
-        # solid angle of selected events
-        self._min_dec = np.arcsin(self._sinDec_range[0])
-        self._max_dec = np.arcsin(self._sinDec_range[1])
-        self._omega = 2. * np.pi * (self._sinDec_range[1] - self._sinDec_range[0])
-
-        return
-
-    def _weights(self):
-        r"""Setup weights for given models.
-
-        """
-        # weights given in days, weighted to the point source flux
-        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
-
-        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
-
-        # normalized weights for probability
-        self._norm_w = self.mc_arr["ow"] / self._raw_flux
-
-        # double-check if no weight is dominating the sample
-        if self._norm_w.max() > 0.1:
-            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
-                            self._norm_w.max()))
-
-        return
-
-    def fill(self, mc, livetime, sinDec_bins):
-        r"""Fill the Injector with MonteCarlo events selecting events around
-        the source position(s).
-
-        Parameters
-        -----------
-        mc : recarray, dict of recarrays with sample enum as key (MultiPointSourceLLH)
-            Monte Carlo events
-        livetime : float, dict of floats
-            Livetime per sample
-
-        """
-
-        if isinstance(mc, dict) ^ isinstance(livetime, dict):
-            raise ValueError("mc and livetime not compatible")
-
-        self.mc = dict()
-        self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
-                                         ("trueE", np.float), ("ow", np.float),
-                                         ("dec_bin", np.int), ("sinDec", np.float), ("trueDec", np.float)])
-
-        if not isinstance(mc, dict):
-            mc = {-1: mc}
-            livetime = {-1: livetime}
-
-        for key, mc_i in mc.iteritems():
-            # get MC event's in the selected energy and sinDec range
-            band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
-                         &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
-            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
-                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
-
-            if not np.any(band_mask):
-                print("Sample {0:d}: No events were selected!".format(key))
-                self.mc[key] = mc_i[band_mask]
-
-                continue
-
-            self.mc[key] = mc_i[band_mask]
-
-            N = np.count_nonzero(band_mask)
-            mc_arr = np.empty(N, dtype=self.mc_arr.dtype)
-            mc_arr["idx"] = np.arange(N)
-            mc_arr["enum"] = key * np.ones(N)
-            mc_arr["ow"] = self.mc[key]["ow"] * livetime[key] * 86400.
-            mc_arr["trueE"] = self.mc[key]["trueE"]
-            mc_arr["sinDec"] = self.mc[key]["sinDec"]
-            mc_arr["trueDec"] = self.mc[key]["trueDec"]
-            mc_arr["dec_bin"] = np.digitize(self.mc[key]["sinDec"], sinDec_bins)
-
-            self.mc_arr = np.append(self.mc_arr, mc_arr)
-
-        if len(self.mc_arr) < 1:
-            raise ValueError("Select no events at all")
-
-        print("Selected {0:d} events in total".format(len(self.mc_arr)))
-
-        self._weights()
-
-        return
-
-    def flux2mu(self, flux):
-        r"""Convert a flux to mean number of expected events.
-
-        Converts a flux :math:`\Phi_0` to the mean number of expected
-        events using the spectral index :math:`\gamma`, the
-        specified energy unit `x GeV` and the point of normalization `E0`.
-
-        The flux is calculated as follows:
-
-        .. math::
-
-            \frac{d\Phi}{dE}=\Phi_0\,E_0^{2-\gamma}
-                                \left(\frac{E}{E_0}\right)^{-\gamma}
-
-        In this way, the flux will be equivalent to a power law with
-        index of -2 at the normalization energy `E0`.
-
-        """
-
-        gev_flux = (flux
-                        * (self.E0 * self.GeV)**(self.gamma - 1.)
-                        * (self.E0)**(self.gamma - 2.))
-
-        return self._raw_flux * gev_flux
-
-    def mu2flux(self, mu):
-        r"""Calculate the corresponding flux in [*GeV*^(gamma - 1) s^-1 cm^-2]
-        for a given number of mean source events.
-
-        """
-
-        gev_flux = mu / self._raw_flux
-
-        return (gev_flux
-                    * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
-                    * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
-
-    def sample(self, template, mean_mu, sinDec_bins, poisson=True, coords = 'equatorial'):
-        r""" Generator to get sampled events for a Point Source location.
-
-        Parameters
-        -----------
-        mean_mu : float
-            Mean number of events to sample
-
-        Returns
-        --------
-        num : int
-            Number of events
-        sam_ev : iterator
-            sampled_events for each loop iteration, either as simple array or
-            as dictionary for each sample
-
-        Optional Parameters
-        --------------------
-        poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
-
-        """
-
-
-        # generate event numbers using poissonian events
-        while True:
-            num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
-
-            logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_mu))
-
-            # if no events should be sampled, return nothing
-            if num < 1:
-                yield num, None
-                continue
-
-            nside   = hp.get_nside(template)
-            npix    = hp.nside2npix(nside)
-            src_pix = self.random.choice(npix, size=num, p=template)
-
-            if coords == 'galactic':
-                theta_gal, phi_gal = hp.pix2ang(nside, src_pix)
-                theta_eq, phi_eq   = hp.Rotator(coord = ['G','C'], rot = [0,0])(theta_gal, phi_gal)
-                src_dec            = np.pi/2. - theta_eq 
-                src_ra             = phi_eq - np.pi
-            else:
-                theta_eq, src_ra = hp.pix2ang(nside, src_pix)
-                src_dec          = np.pi/2. - theta_eq 
-
-            sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
-            keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
-            print(np.sin(src_dec))
-            print(sinDec_bins)
-            dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
-
-            for i, dec in enumerate(src_dec):
-                mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
-                probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
-                sam   = self.random.choice(self.mc_arr[mask], p=probs)
-                for key in keys:
-                    sam_idx[key][i] = sam[key]
-
-            # get the events that were sampled
-            enums = np.unique(sam_idx["enum"])
-
-            if len(enums) == 1 and enums[0] < 0:
-                # only one sample, just return recarray
-                sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
-
-                yield num, rotate_struct(sam_ev, src_ra, src_dec)
-                continue
-
-            sam_ev = dict()
-            for enum in enums:
-                idx = sam_idx[sam_idx["enum"] == enum]["idx"]
-                sam_ev_i = np.copy(self.mc[enum][idx])
-                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra, src_dec)
-
-            yield num, sam_ev
 
 class ModelInjector(PointSourceInjector):
     r"""PointSourceInjector that weights events according to a specific model
@@ -975,4 +601,192 @@ class ModelInjector(PointSourceInjector):
 
         return float(mu) / self._raw_flux
 
+
+
+
+
+
+
+
+class StackingPointSourceInjector(PointSourceInjector):
+    r"""PointSourceInjector that injects events from different sources.
+
+    """
+
+    def __init__(self, *args, **kwargs):
+
+        #Same initialisation as in injector class
+        super(StackingPointSourceInjector, self).__init__(*args, **kwargs)
+        return
+
+    
+    def fill(self, src_dec, mc, livetime, **kwargs):
+        r"""Fill the Injector with MonteCarlo events selecting events around
+        the source positions.
+
+        Parameters
+        -----------
+        src_dec: array-like
+            Source locations
+        mc : recarray, dict of recarrays with sample enum as key (StackingMultiPointSourceLLH)
+            Monte Carlo events
+        livetime : float, dict of floats
+            Livetime per sample
+
+        """
+
+        if isinstance(mc, dict) ^ isinstance(livetime, dict):
+            raise ValueError("mc and livetime not compatible")
+
+        self.src_dec = src_dec
+        self.w_theo = kwargs.pop('w_theo',np.ones_like(src_dec,dtype=float))
+        self.w_theo /= self.w_theo.sum()
+        ow = np.empty(0,dtype=float)
+
+        self.mc = dict()
+        self.mc_arr = np.empty(0, dtype=[("idx", np.int),("src_idx", np.int), ("enum", np.int)])
+
+
+        if not isinstance(mc, dict):
+            mc = {-1: mc}
+            livetime = {-1: livetime}
+
+        for key, mc_i in mc.iteritems():
+            # get MC event's in the selected energy and sinDec range around each src declination
+            band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec)[:, np.newaxis])
+                         &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)[:, np.newaxis]))
+
+            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
+                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
+
+
+            if not np.any(band_mask):
+                print("Sample {0:d}: No events were selected!".format(key))
+                self.mc[key] = mc_i[band_mask.any(axis=0)]
+
+                continue
+
+
+            # all mc events that are at least in one declination band
+            total_mask = band_mask.any(axis=0)
+            N = np.count_nonzero(total_mask)
+            self.mc[key] = mc_i[total_mask]
+
+            #adjust band mask, count number of total events selected
+            band_mask = (band_mask.T[total_mask]).T
+            n = np.count_nonzero(band_mask)
+
+
+
+            # save mc info (idx, src_idx, enum, weigth) of all selected events
+            mc_arr = np.empty(n, dtype=self.mc_arr.dtype)
+
+            _m = band_mask.ravel()
+            mc_arr["idx"] = np.tile(np.arange(N),len(self.src_dec))[_m]
+            mc_arr['src_idx'] = np.repeat(np.arange(len(self.src_dec)),band_mask.sum(axis=1))
+            mc_arr["enum"] = key * np.ones(len(mc_arr['idx']))
+            self.mc_arr = np.append(self.mc_arr, mc_arr)
+
+            _ow = np.tile(self.mc[key]['ow'] * self.mc[key]["trueE"]**(-self.gamma), len(self.src_dec))[_m] * livetime[key] * 86400.
+            ow = np.append(ow,_ow)
+
+
+
+            print("Sample {0:s}: Selected {1:6d} events for {2:6d} sources.".format(
+                                        str(key), n, len(self.src_dec)))
+
+        
+        omega = (self._omega / self.w_theo)[self.mc_arr['src_idx']]
+
+
+
+        if len(self.mc_arr) < 1:
+            raise ValueError("Select no events at all")
+
+        print("Selected {0:d} events in total".format(len(self.mc_arr)))
+
+        self._weights(ow, omega)
+
+
+        return
+
+    def _weights(self, ow, omega):
+        r"""Setup weights for given models.
+
+        """
+        # weights given in days, weighted to the point source flux
+        ow *= ow / omega
+
+        self._raw_flux = np.sum(ow, dtype=np.float)
+
+        # normalized weights for probability
+        self._norm_w = ow / self._raw_flux
+
+        # double-check if no weight is dominating the sample
+        if self._norm_w.max() > 0.1:
+            logger.warn("Warning: Maximal weight exceeds 10%: {0:7.2%}".format(
+                            self._norm_w.max()))
+
+        return
+
+
+    def sample(self, src_ra, mean_mu, poisson=True):
+        r""" Generator to get sampled events for a Point Source location.
+
+        Parameters
+        -----------
+        mean_mu : float
+            Mean number of events to sample
+
+        Returns
+        --------
+        num : int
+            Number of events
+        sam_ev : iterator
+            sampled_events for each loop iteration, either as simple array or
+            as dictionary for each sample
+
+        Optional Parameters
+        --------------------
+        poisson : bool
+            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+
+        """
+
+        # generate event numbers using poissonian events
+        while True:
+
+            num = (self.random.poisson(mean_mu)
+                        if poisson else int(np.around(mean_mu)))
+
+            logger.debug(("Generated number of sources: {0:3d} "+
+                          "of mean {1:5.1f} sources").format(num, mean_mu))
+
+            # if no events should be sampled, return nothing
+            if num < 1:
+                yield num, None
+                continue
+
+            sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
+            
+
+            
+            # get the events that were sampled
+            enums = np.unique(sam_idx["enum"])
+
+            if len(enums) == 1 and enums[0] < 0:
+                # only one sample, just return recarray
+                sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
+
+                yield num, rotate_struct(sam_ev, src_ra[sam_idx['src_idx']], self.src_dec[sam_idx['src_idx']])
+                continue
+
+            sam_ev = dict()
+            for enum in enums:
+                idx = sam_idx[sam_idx["enum"] == enum]["idx"]
+                sam_ev_i = np.copy(self.mc[enum][idx])
+                src_ind = sam_idx[sam_idx["enum"] == enum]["src_idx"]
+                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra[src_ind], self.src_dec[src_ind])
+
+            yield num, sam_ev
 
