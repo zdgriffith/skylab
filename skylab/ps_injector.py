@@ -96,7 +96,9 @@ def rotate_struct(ev, ra, dec):
     rot["sinDec"] = np.sin(rot_dec)
 
     # "delete" Monte Carlo information from sampled events
-    mc = ["trueRa", "trueDec", "trueE", "ow"]
+    mc = ["trueRa", "trueE", "ow"]
+    if "trueDec"    in ev.dtype.names: mc.append("trueDec")
+    if "trueSinDec" in ev.dtype.names: mc.append("trueSinDec")
 
     return drop_fields(rot, mc)
 
@@ -294,7 +296,7 @@ class PointSourceInjector(Injector):
     @property
     def src_dec(self):
         return self._src_dec
-    
+
 
     @src_dec.setter
     def src_dec(self, val):
@@ -312,7 +314,7 @@ class PointSourceInjector(Injector):
 
         return
 
-    
+
     def _setup(self):
         r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
         angles and declination bands have to be re-set.
@@ -457,13 +459,13 @@ class PointSourceInjector(Injector):
                     * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
                     * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
 
-    def sample(self, src_ra, mean_mu, poisson=True):
+    def sample(self, src_ra, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
         -----------
-        mean_mu : float
-            Mean number of events to sample
+        mean_signal : float
+            Mean number of signal events to sample
 
         Returns
         --------
@@ -476,17 +478,17 @@ class PointSourceInjector(Injector):
         Optional Parameters
         --------------------
         poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+            Use poisson fluctuations, otherwise sample exactly *mean_signal*
 
         """
 
         # generate event numbers using poissonian events
         while True:
-            num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+            num = (self.random.poisson(mean_signal)
+                        if poisson else int(np.around(mean_signal)))
 
             logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_mu))
+                          "of mean {1:5.1f} sources").format(num, mean_signal))
 
             # if no events should be sampled, return nothing
             if num < 1:
@@ -619,7 +621,7 @@ class StackingPointSourceInjector(PointSourceInjector):
         super(StackingPointSourceInjector, self).__init__(*args, **kwargs)
         return
 
-    
+
     def fill(self, src_dec, mc, livetime, **kwargs):
         r"""Fill the Injector with MonteCarlo events selecting events around
         the source positions.
@@ -695,7 +697,7 @@ class StackingPointSourceInjector(PointSourceInjector):
             print("Sample {0:s}: Selected {1:6d} events for {2:6d} sources.".format(
                                         str(key), n, len(self.src_dec)))
 
-        
+
         omega = (self._omega / self.w_theo)[self.mc_arr['src_idx']]
 
 
@@ -730,13 +732,13 @@ class StackingPointSourceInjector(PointSourceInjector):
         return
 
 
-    def sample(self, src_ra, mean_mu, poisson=True):
+    def sample(self, src_ra, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
         -----------
-        mean_mu : float
-            Mean number of events to sample
+        mean_signal : float
+            Mean number of signal events to sample
 
         Returns
         --------
@@ -749,18 +751,18 @@ class StackingPointSourceInjector(PointSourceInjector):
         Optional Parameters
         --------------------
         poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+            Use poisson fluctuations, otherwise sample exactly *mean_signal*
 
         """
 
         # generate event numbers using poissonian events
         while True:
 
-            num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+            num = (self.random.poisson(mean_signal)
+                        if poisson else int(np.around(mean_signal)))
 
             logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_mu))
+                          "of mean {1:5.1f} sources").format(num, mean_signal))
 
             # if no events should be sampled, return nothing
             if num < 1:
@@ -768,9 +770,9 @@ class StackingPointSourceInjector(PointSourceInjector):
                 continue
 
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
-            
 
-            
+
+
             # get the events that were sampled
             enums = np.unique(sam_idx["enum"])
 
