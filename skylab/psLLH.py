@@ -1232,13 +1232,12 @@ class PointSourceLLH(object):
 
         assert(n == len(self._ev))
 
-        S_sc = self.llh_model.signal_sc(src_map, self._ev, coords = coords)
-        B = (1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
-        SoB = self._ev_S / B
-
         w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
+        S_sc      = self.llh_model.signal_sc(src_map, self._ev, coords = coords)
+        B         = (1/w)*(1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
+        SoB       = self._ev_S / B
 
-        x = (SoB * w - 1.) / N
+        x = (SoB - 1.) / N
 
         # check which sums of the likelihood are close to the divergence
         aval = -1. + _aval
