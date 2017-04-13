@@ -84,6 +84,11 @@ def rotate_struct(ev, ra, dec):
     """
     names = ev.dtype.names
 
+    if not "sinDec" in names:
+      ev = np.lib.recfunctions.append_fields(
+               ev, "sinDec", np.sin(ev["dec"]),
+               dtypes=np.float, usemask=False)
+
     rot = np.copy(ev)
 
     # Function call
@@ -97,8 +102,8 @@ def rotate_struct(ev, ra, dec):
 
     # "delete" Monte Carlo information from sampled events
     mc = ["trueRa", "trueE", "ow"]
-    if "trueDec"    in ev.dtype.names: mc.append("trueDec")
-    if "trueSinDec" in ev.dtype.names: mc.append("trueSinDec")
+    if "trueDec"    in names: mc.append("trueDec")
+    if "trueSinDec" in names: mc.append("trueSinDec")
 
     return drop_fields(rot, mc)
 
