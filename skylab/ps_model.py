@@ -152,6 +152,8 @@ class ClassicLLH(NullModel):
 
     _gamma = 2.
 
+    useMCbackground = False
+
     def __init__(self, *args, **kwargs):
         r"""Constructor of ClassicLLH. Set all configurations here.
 
@@ -180,9 +182,15 @@ class ClassicLLH(NullModel):
 
         """
 
-        hist, bins = np.histogram(exp["sinDec"], density=True,
-                                  bins=self.sinDec_bins,
-                                  range=self.sinDec_range)
+        if self.useMCbackground == False:
+          hist, bins = np.histogram(exp["sinDec"], density=True,
+                                    bins=self.sinDec_bins,
+                                    range=self.sinDec_range)
+        else:
+          hist, bins = np.histogram(mc["sinDec"], density=True,
+                                    weights=mc["conv"] + mc["astro"],
+                                    bins=self.sinDec_bins,
+                                    range=self.sinDec_range)
 
         # background spline
 
