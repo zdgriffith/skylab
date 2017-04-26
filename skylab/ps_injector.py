@@ -105,6 +105,12 @@ def rotate_struct(ev, ra, dec):
     if "trueDec"    in names: mc.append("trueDec")
     if "trueSinDec" in names: mc.append("trueSinDec")
 
+    # "delete" extra conv, astro, and prompt weights
+    # from diffuse muon neutrino samples made by Rene Reimann
+    if "conv"       in names: mc.append("conv")
+    if "astro"      in names: mc.append("astro")
+    if "prompt"     in names: mc.append("prompt")
+
     return drop_fields(rot, mc)
 
 
