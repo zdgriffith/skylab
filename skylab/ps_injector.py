@@ -297,7 +297,6 @@ class PointSourceInjector(Injector):
     def src_dec(self):
         return self._src_dec
 
-
     @src_dec.setter
     def src_dec(self, val):
         if not np.all(np.fabs(val) < np.pi / 2.):
@@ -313,7 +312,6 @@ class PointSourceInjector(Injector):
         self._setup()
 
         return
-
 
     def _setup(self):
         r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
@@ -601,14 +599,9 @@ class ModelInjector(PointSourceInjector):
         return float(mu) / self._raw_flux
 
 
-
-
-
-
-
-
 class StackingPointSourceInjector(PointSourceInjector):
-    r"""PointSourceInjector that injects events from different sources.
+    r"""PointSourceInjector that injects events which are
+        shared across multiple stacked sources.
 
     """
 
@@ -638,13 +631,13 @@ class StackingPointSourceInjector(PointSourceInjector):
             raise ValueError("mc and livetime not compatible")
 
         self.src_dec = src_dec
-        self.w_theo = kwargs.pop('w_theo',np.ones_like(src_dec,dtype=float))
+        self.w_theo = kwargs.pop('w_theo',np.atleast_1d(np.ones_like(src_dec,dtype=float)))
         self.w_theo /= self.w_theo.sum()
-        ow = np.empty(0,dtype=float)
 
         self.mc = dict()
-        self.mc_arr = np.empty(0, dtype=[("idx", np.int),("src_idx", np.int), ("enum", np.int)])
-
+        self.mc_arr = np.empty(0, dtype=[("idx", np.int),("src_idx", np.int),
+                                         ("enum", np.int),("trueE", np.float),
+                                         ("ow", np.float)])
 
         if not isinstance(mc, dict):
             mc = {-1: mc}
@@ -658,69 +651,80 @@ class StackingPointSourceInjector(PointSourceInjector):
             band_mask &= ((mc_i["trueE"] > self.e_range[0])
                           &(mc_i["trueE"] < self.e_range[1]))
 
-
             if not np.any(band_mask):
                 print("Sample {0:d}: No events were selected!".format(key))
                 self.mc[key] = mc_i[band_mask.any(axis=0)]
 
                 continue
 
-
             # all mc events that are at least in one declination band
             total_mask = band_mask.any(axis=0)
             N = np.count_nonzero(total_mask)
+
             self.mc[key] = mc_i[total_mask]
 
             #adjust band mask, count number of total events selected
             band_mask = (band_mask.T[total_mask]).T
             n = np.count_nonzero(band_mask)
 
-
-
-            # save mc info (idx, src_idx, enum, weigth) of all selected events
+            # save mc info (idx, src_idx, enum, weight) of all selected events
             mc_arr = np.empty(n, dtype=self.mc_arr.dtype)
 
+            # unravel mask to stack source columns on top of one another
+            # thereby making a 1D array of length len(self.src_dec) * n
             _m = band_mask.ravel()
+
             mc_arr["idx"] = np.tile(np.arange(N),len(self.src_dec))[_m]
             mc_arr['src_idx'] = np.repeat(np.arange(len(self.src_dec)),band_mask.sum(axis=1))
             mc_arr["enum"] = key * np.ones(len(mc_arr['idx']))
+            mc_arr["ow"] = np.tile(self.mc[key]['ow'],len(self.src_dec))[_m] * livetime[key] * 86400.
+            mc_arr["trueE"] = np.tile(self.mc[key]['trueE'],len(self.src_dec))[_m]
+
             self.mc_arr = np.append(self.mc_arr, mc_arr)
-
-            _ow = np.tile(self.mc[key]['ow'] * self.mc[key]["trueE"]**(-self.gamma), len(self.src_dec))[_m] * livetime[key] * 86400.
-            ow = np.append(ow,_ow)
-
-
 
             print("Sample {0:s}: Selected {1:6d} events for {2:6d} sources.".format(
                                         str(key), n, len(self.src_dec)))
 
+        # per event solid angle to account for events in different dec bands
+        omega = (self._omega)[self.mc_arr['src_idx']]
 
-        omega = (self._omega / self.w_theo)[self.mc_arr['src_idx']]
-
-
+        # per event source weights for each source
+        w_theo = (self.w_theo)[self.mc_arr['src_idx']]
 
         if len(self.mc_arr) < 1:
             raise ValueError("Select no events at all")
 
         print("Selected {0:d} events in total".format(len(self.mc_arr)))
 
-        self._weights(ow, omega)
-
+        self._weights(omega, w_theo)
 
         return
 
-    def _weights(self, ow, omega):
-        r"""Setup weights for given models.
+    def _weights(self, omega, w_theo):
+        r"""Setup weights for simple power law model:
 
+                 dN/dE = A (E / E0)^-gamma
+
+            where A has units of events / (GeV cm^2 s). We treat
+            the 'events' in the numerator as implicit and say the
+            units are [GeV^-1 cm^-2 s^-1].
+
+            The units of A balance with One Weight [GeV cm^2 sr] * Livetime [s] / Solid Angle [sr]
+            to yield the number of events expected in the given livetime.
+            We leave out A for now because we multiply by it later.
+
+            NOTE: w_theo is a unitless scaling factor between the different
+                  stacked sources. Two sources with equal weights would give [0.5, 0.5]
+                  where each 0.5 is multiplied by every MC event in the
+                  declination band containing the source location.
         """
-        print("You are here (1)")
-        # weights given in days, weighted to the point source flux
-        ow *= ow / omega
+        # energy scaled weights (everything but A)
+        self.mc_arr["ow"] *= (self.mc_arr["trueE"] / self.E0)**(-self.gamma) / omega * w_theo # [GeV cm^2 s]
 
-        self._raw_flux = np.sum(ow, dtype=np.float)
+        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float) # [GeV cm^2 s]
 
         # normalized weights for probability
-        self._norm_w = ow / self._raw_flux
+        self._norm_w = self.mc_arr["ow"] / self._raw_flux
 
         # double-check if no weight is dominating the sample
         if self._norm_w.max() > 0.1:
@@ -728,7 +732,6 @@ class StackingPointSourceInjector(PointSourceInjector):
                             self._norm_w.max()))
 
         return
-
 
     def sample(self, src_ra, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
@@ -768,8 +771,6 @@ class StackingPointSourceInjector(PointSourceInjector):
                 continue
 
             sam_idx = self.random.choice(self.mc_arr, size=num, p=self._norm_w)
-
-
 
             # get the events that were sampled
             enums = np.unique(sam_idx["enum"])
