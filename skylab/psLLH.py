@@ -205,7 +205,8 @@ class PointSourceLLH(object):
     _src_dec = _src_dec
 
     def __init__(self, exp, mc, livetime, scramble=True, upscale=False,
-                 background = None, coords = 'equatorial', **kwargs):
+                 background = None, template_map = None, sigma_bins = None,
+                 scrambled_src_map = None, src_map = None, coords = 'equatorial', **kwargs):
         r"""Constructor of `PointSourceLikelihood`.
 
         Fill the class with data and all necessary configuration.
@@ -221,6 +222,13 @@ class PointSourceLLH(object):
             creation of weighting splines that need signal information.
         livetime : float
             Livetime of experimental data.
+
+        template_map : array of healpix arrays
+            template maps used for signal pdf construction, in bins of PSF sizes
+        sigma_bins: array
+            bins of PSF sizes used for template map convolution
+        scrambled_src_map : healpix array
+            (template map x acceptance) used for signal subtraction from background.  If None, no subtraction will be done.
         coords : string
             Coordinate system where we perform the analysis
 
@@ -324,7 +332,14 @@ class PointSourceLLH(object):
             self.exp = numpy.lib.recfunctions.append_fields(
                 self.exp, "B", self.llh_model.background(self.exp),
                 usemask=False)
-        self.background = background
+        self.background   = background
+
+        #Template related parameters
+        self.scrambled_src_map = scrambled_src_map
+        self.template_map = template_map
+        self.sigma_bins   = sigma_bins
+        self.src_map      = src_map
+        self.coords       = coords
 
         return
 
@@ -1037,19 +1052,11 @@ class PointSourceLLH(object):
 
         return trials
 
-    def do_extended_trials(self, template_map, sigma_bins, src_map = None, coords = 'equatorial', **kwargs):
+    def do_extended_trials(self, **kwargs):
         r"""Calculation of scrambled trials.
 
         Perform trials on scrambled event maps to estimate the event
         distribution.
-
-        Parameters
-        ----------
-
-        template_map : array of healpix arrays
-            template maps used for signal pdf construction, in bins of PSF sizes
-        sigma_bins: array
-            bins of PSF sizes used for template map convolution
 
         Returns
         -------
@@ -1083,9 +1090,7 @@ class PointSourceLLH(object):
         samples = [sam[1] for sam in samples]
 
         if self.ncpu > 1 and len(samples) > self.ncpu:
-            args = [(self, template_map, sigma_bins, src_map, coords, sam, True,
-                     dict(kwargs.items()
-                          + [("seed", self.random.randint(2**32))]))
+            args = [(self, sam, True, dict(kwargs.items() + [("seed", self.random.randint(2**32))]))
                     for sam in samples]
 
             pool = multiprocessing.Pool(self.ncpu)
@@ -1097,11 +1102,12 @@ class PointSourceLLH(object):
 
             del pool
         else:
-            result = [self.fit_extended_source(template_map, sigma_bins, inject=sam,
-                                               src_map = src_map,
-                                               coords  = coords,
-                                               scramble=True, **kwargs)
-                      for sam in samples]
+            result = []
+            for i, sam in enumerate(samples):
+                print(i)
+                result.append(self.fit_extended_source(inject=sam, scramble=True, **kwargs))
+            #result = [self.fit_extended_source(inject=sam, scramble=True, **kwargs)
+            #          for sam in samples]
 
         for i, res in enumerate(result):
             trials["TS"][i] = res[0]
@@ -1120,8 +1126,6 @@ class PointSourceLLH(object):
                   \frac{n_s}{N}\left(\frac{\mathcal{S}}{\mathcal{B}}w-1\right)
                                      +1\right)
 
-        Parameters
-        ----------
         fit_pars : dict
             Dictionary with all fit parameters, nsources and all defined by
             `llh_model`.
@@ -1141,101 +1145,14 @@ class PointSourceLLH(object):
 
         assert(n == len(self._ev))
 
-        SoB = self._ev_S / self._ev["B"]
-
-        w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
-
-        x = (SoB * w - 1.) / N
-
-        # check which sums of the likelihood are close to the divergence
-        aval = -1. + _aval
-        alpha = nsources * x
-
-        # select events close to divergence
-        xmask = alpha > aval
-
-        # function value, log1p for OK, otherwise quadratic taylor
-        funval = np.empty_like(alpha, dtype=np.float)
-        funval[xmask] = np.log1p(alpha[xmask])
-        funval[~xmask] = (np.log1p(aval)
-                      + 1. / (1.+aval) * (alpha[~xmask] - aval)
-                      - 1./2./(1.+aval)**2 * (alpha[~xmask]-aval)**2)
-        funval = funval.sum()
-        if N > n:
-            funval += (N - n) * np.log1p(-nsources / N)
-
-        # gradients
-
-        # in likelihood function
-        ns_grad = np.empty_like(alpha, dtype=np.float)
-        ns_grad[xmask] = x[xmask] / (1. + alpha[xmask])
-        ns_grad[~xmask] = (x[~xmask] / (1. + aval)
-                       - x[~xmask] * (alpha[~xmask] - aval) / (1. + aval)**2)
-        ns_grad = ns_grad.sum()
-        if N > n:
-            ns_grad -= (N - n) / (N - nsources)
-
-        # in weights
-        if grad_w is not None:
-            par_grad = 1. / N * SoB * grad_w
-
-            par_grad[:, xmask] *= nsources / (1. + alpha[xmask])
-            par_grad[:, ~xmask] *= (nsources / (1. + aval)
-                                    - nsources * (alpha[~xmask] - aval)
-                                        / (1. + aval)**2)
-
-            par_grad = par_grad.sum(axis=-1)
-
+        if self.scrambled_src_map is not None:
+            S_sc      = self.llh_model.signal_sc(self.scrambled_src_map, self._ev, coords = self.coords)
+            B         = (1/w)*(1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
+            SoB       = self._ev_S / B
         else:
-            par_grad = np.zeros((0,))
-
-        grad = np.append(ns_grad, par_grad)
-
-        # multiply by two for chi2 distributed test-statistic
-        LogLambda = 2. * funval
-        grad = 2. * grad
-
-        return LogLambda, grad
-
-    def extended_llh(self, src_map, coords = 'equatorial', **fit_pars):
-        r"""Calculate the likelihood ratio for the selected events.
-
-        Evaluate pointsource likelihood using cached values. For new input,
-        values are re-evaluated and cached.
-
-        .. math:: \log\Lambda=\sum_i\log\left(
-                  \frac{n_s}{N}\left(\frac{\mathcal{S}}{\mathcal{B}}w-1\right)
-                                     +1\right)
-
-        Parameters
-        ----------
-        src_map : healpix array
-            (template map x acceptance) used for signal subtraction from background
-        coords : coordinate system maps are in.  Galactic and Equatorial are supported.
-
-        fit_pars : dict
-            Dictionary with all fit parameters, nsources and all defined by
-            `llh_model`.
-
-        Returns
-        -------
-        funval : float
-            Function value
-        grad : array_like
-            Gradient at the point.
-        """
-
-        nsources = fit_pars.pop("nsources")
-
-        N = self._N
-        n = self._n
-
-        assert(n == len(self._ev))
+            SoB = self._ev_S / self._ev["B"]
 
         w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
-        S_sc      = self.llh_model.signal_sc(src_map, self._ev, coords = coords)
-        B         = (1/w)*(1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
-        SoB       = self._ev_S / B
 
         x = (SoB - 1.) / N
 
@@ -1359,17 +1276,20 @@ class PointSourceLLH(object):
                                 **kwargs)
 
         # set up mindict to enter while, exit if fit looks nice
-        i = 0
-        min_dict = dict(warnflag=0, task="FACTR")
-        while min_dict["warnflag"] == 0 and "FACTR" in min_dict["task"]:
+        i = 1
+        
+        while min_dict["warnflag"] == 2 and "FACTR" in min_dict["task"]:
+            if i > 100:
+                raise RuntimeError("Did not manage good fit")
+
+            pars[0] = self.random.uniform(0., 2. * pars[0])
+
             # no stop due to gradient
             xmin, fmin, min_dict = scipy.optimize.fmin_l_bfgs_b(
                                     _llh, pars,
                                     bounds=self.par_bounds,
                                     **kwargs)
-            pars[0] = self.random.uniform(0., 2. * pars[0])
-            if i > 100:
-                raise RuntimeError("Did not manage good fit")
+            i += 1
 
         if fmin > 0 and (self.par_bounds[0][0] <= 0
                          and self.par_bounds[0][1] >= 0):
@@ -1395,18 +1315,76 @@ class PointSourceLLH(object):
 
         return fmin, xmin
 
-    def fit_extended_source(self, template_map, sigma_bins, src_map = None, coords = 'equatorial', **kwargs):
-        """Minimize the negative log-Likelihood using a source template
+    def _select_extended_events(self, **kwargs):
+        r"""Select events around source location(s) used in llh calculation.
 
         Parameters
         ----------
-        template_map : array of healpix arrays
-            template maps used for signal pdf construction, in bins of PSF sizes
-        sigma_bins: array
-            bins of PSF sizes used for template map convolution
-        src_map : healpix array
-            (template map x acceptance) used for signal subtraction from background.  If None, no subtraction will be done.
-        coords : coordinate system maps are in.  Galactic and Equatorial are supported.
+        scramble : bool
+            Scramble rightascension prior to selection.
+        inject : numpy_structured_array
+            Events to add to the selected events, fields equal to exp. data.
+
+        """
+
+        scramble = kwargs.pop("scramble", False)
+        inject = kwargs.pop("inject", None)
+        if kwargs:
+            raise ValueError("Don't know arguments", kwargs.keys())
+
+        # reset
+        self.reset()
+
+        # number of total events
+        self._N = len(self.exp)
+
+        # update the zenith selection and background probability
+        self._ev = self.exp
+
+        # update rightascension information for scrambled events
+        if scramble and not self.fix:
+            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
+                                                 size=len(self._ev))
+
+        if inject is not None:
+            if self.background is not None:
+                bg = self.llh_model.extended_background(inject, self.background, self.coords)
+                if np.isscalar(bg):
+                    bg = np.array([bg])
+                self._ev = np.append(self._ev,
+                                     numpy.lib.recfunctions.append_fields(
+                                        inject, "B",
+                                        bg,
+                                        usemask=False))
+            else:
+                self._ev = np.append(self._ev,
+                                     numpy.lib.recfunctions.append_fields(
+                                        inject, "B",
+                                        self.llh_model.background(inject),
+                                        usemask=False))
+
+            self._N += len(inject)
+
+        # calculate signal term
+        self._ev_S = self.llh_model.extended_signal(self.template_map, self.sigma_bins, self._ev, coords = self.coords)
+
+        # do not calculate values with signal below threshold
+        ev_mask = self._ev_S > self.thresh_S
+        self._ev = self._ev[ev_mask]
+        self._ev_S = self._ev_S[ev_mask]
+
+        # set number of selected events
+        self._n = len(self._ev)
+
+        if (self._n < 1
+            and (np.sin(self._src_dec) < self.sinDec_range[0]
+                 and np.sin(self._src_dec) > self.sinDec_range[-1])):
+            logger.error("No event was selected, fit will go to -infinity")
+
+        return
+
+    def fit_extended_source(self, **kwargs):
+        """Minimize the negative log-Likelihood using a source template
 
         Returns
         -------
@@ -1440,11 +1418,7 @@ class PointSourceLLH(object):
 
             fit_pars = dict([(par, xi) for par, xi in zip(self.params, x)])
 
-            #If given a signal map, subtract from background
-            if src_map is not None:
-                fun, grad = self.extended_llh(src_map, coords = coords, **fit_pars)
-            else:
-                fun, grad = self.llh(**fit_pars)
+            fun, grad = self.llh(**fit_pars)
 
             # return negative value needed for minimization
             return -fun, -grad
@@ -1454,47 +1428,7 @@ class PointSourceLLH(object):
         kwargs.setdefault("pgtol", _pgtol)
 
         # Set all weights once for this src location, if not already cached
-
-        # reset
-        self.reset()
-
-        # number of total events
-        self._N = len(self.exp)
-
-        # update the zenith selection and background probability
-        self._ev = self.exp
-
-        # update rightascension information for scrambled events
-        if scramble and not self.fix:
-            self._ev["ra"] = self.random.uniform(0., 2. * np.pi,
-                                                 size=len(self._ev))
-
-        if inject is not None:
-            if self.background is not None:
-                self._ev = np.append(self._ev,
-                                     numpy.lib.recfunctions.append_fields(
-                                        inject, "B",
-                                        self.llh_model.extended_background(inject, self.background, coords),
-                                        usemask=False))
-            else:
-                self._ev = np.append(self._ev,
-                                     numpy.lib.recfunctions.append_fields(
-                                        inject, "B",
-                                        self.llh_model.background(inject),
-                                        usemask=False))
-
-            self._N += len(inject)
-
-        # calculate signal term
-        self._ev_S = self.llh_model.extended_signal(template_map, sigma_bins,self._ev, coords = coords)
-
-        # do not calculate values with signal below threshold
-        ev_mask = self._ev_S > self.thresh_S
-        self._ev = self._ev[ev_mask]
-        self._ev_S = self._ev_S[ev_mask]
-
-        # set number of selected events
-        self._n = len(self._ev)
+        self._select_extended_events(inject=inject, scramble=scramble)
 
         if self._N < 1:
             # No events selected
@@ -1515,6 +1449,7 @@ class PointSourceLLH(object):
 
         # set up mindict to enter while, exit if fit looks nice
         i = 1
+
         while min_dict["warnflag"] == 2 and "FACTR" in min_dict["task"]:
             if i > 100:
                 raise RuntimeError("Did not manage good fit")
@@ -1952,7 +1887,7 @@ class PointSourceLLH(object):
 
         return result
 
-    def extended_sensitivity(self, template_map, src_map, src_ra_map, sigma_bins, dec_bins, alpha, beta, inj, mc, coords = 'equatorial', **kwargs):
+    def extended_sensitivity(self, dec_bins, alpha, beta, inj, mc, **kwargs):
         """Calculate extended source sensitivity for a given source
         hypothesis using weights.
 
@@ -1962,12 +1897,6 @@ class PointSourceLLH(object):
 
         Parameters
         ----------
-        template_map : array of healpix arrays
-            template maps used for signal pdf construction, in bins of PSF sizes
-        src_map : healpix array
-            (template map x acceptance) used for signal subtraction from background
-        sigma_bins: array
-            bins of PSF sizes used for template map convolution
         dec_bins: array
             bins of declination used for mc sampling in signal injection
         alpha : array-like (m, )
@@ -1980,7 +1909,6 @@ class PointSourceLLH(object):
             Monte Carlo to use for injection. Needs all fields that
             is stored in experimental data, plus true information that the
             injector uses: trueRa, trueDec, trueE, ow
-        coords : coordinate system maps are in.  Galactic and Equatorial are supported.
 
         Returns
         -------
@@ -2047,13 +1975,9 @@ class PointSourceLLH(object):
 
                 n_inj = int(np.mean(trials["n_inj"])) if len(trials) > 0 else 0
                 while True:
-                    n_inj, sample = inj.sample(src_map, n_inj + 1, dec_bins, coords = coords, poisson=False).next()
+                    n_inj, sample = inj.sample(self.src_map, n_inj + 1, dec_bins, coords = self.coords, poisson=False).next()
 
-                    TS_i, xmin_i = self.fit_extended_source(template_map, sigma_bins,
-                                                            src_map = src_ra_map,
-                                                            coords = coords,
-                                                            inject=sample,
-                                                            scramble=True)
+                    TS_i, xmin_i = self.fit_extended_source(inject=sample, scramble=True)
 
                     trial_i = np.empty((1, ), dtype=trials.dtype)
                     trial_i["n_inj"] = n_inj
@@ -2080,10 +2004,8 @@ class PointSourceLLH(object):
 
                 # do trials around active region
                 trials = np.append(trials,
-                                   self.do_extended_trials(template_map, sigma_bins, n_iter=n_iter,
-                                                           src_map = src_ra_map,
-                                                           coords  = coords,
-                                                           mu=inj.sample(src_map, mu_eff, dec_bins, coords = coords),
+                                   self.do_extended_trials(n_iter=n_iter,
+                                                           mu=inj.sample(self.src_map, mu_eff, dec_bins, coords = self.coords),
                                                            **kwargs))
 
 
@@ -2146,10 +2068,7 @@ class PointSourceLLH(object):
 
                 # do trials with best estimate
                 trials = np.append(trials, self.do_extended_trials(
-                    template_map, sigma_bins,
-                    src_map = src_ra_map,
-                    coords  = coords,
-                    mu=inj.sample(src_map, mu_eff, dec_bins, coords = coords), n_iter=n_iter, **kwargs))
+                                   mu=inj.sample(self.src_map, mu_eff, dec_bins, coords = self.coords), n_iter=n_iter, **kwargs))
 
                 sys.stdout.flush()
 
@@ -2199,10 +2118,7 @@ class PointSourceLLH(object):
                           "TS value for alpha = {0:7.2%}".format(alpha_i))
 
                     trials = np.append(trials,
-                                       self.do_extended_trials(template_map, sigma_bins,
-                                                               src_map = src_map,
-                                                               coords  = coords,
-                                                               n_iter=n_bckg,
+                                       self.do_extended_trials(n_iter=n_bckg,
                                                                **kwargs))
 
                     stop = time.time()
@@ -2747,8 +2663,337 @@ def fs(args):
     return llh.fit_source(ra, dec, inject=inject, scramble=scramble, **kwargs)
 
 def extended_fs(args):
-    llh, template_map, sigma_bins, src_map, coords, inject, scramble, kwargs = args
+    llh, inject, scramble, kwargs = args
     if scramble:
         llh.seed = kwargs.pop("seed")
 
-    return llh.fit_extended_source(template_map, sigma_bins, src_map = src_map, coords = coords, inject=inject, scramble=scramble, **kwargs)
+    return llh.fit_extended_source(inject=inject, scramble=scramble, **kwargs)
+
+class MultiExtendedLLH(PointSourceLLH):
+    r"""Class to handle multiple event samples that are distinct of each other.
+
+    Different samples have different effective areas that have to be taken into
+    account for parting the number of expected neutrinos in between the
+    diffenrent samples.
+
+    Each sample is added as an object of PointSourceLLH
+
+    """
+
+    # histograms for signal expectation
+    _gamma_bins = _gamma_bins
+    _gamma_binmids = (_gamma_bins[1:] + _gamma_bins[:-1]) / 2.
+    _gamma_def = _gamma_def
+    _sindec_bins = _sindec_bins
+    _sindec_binmids = (_sindec_bins[1:] + _sindec_bins[:-1]) / 2.
+
+    # caching values
+    _src_dec = np.nan
+
+    def __init__(self, *args, **kwargs):
+        r"""Constructor, set all parameters passed
+
+        """
+
+        set_pars(self, **kwargs)
+
+        # init empty dictionary containers
+        self._enum = dict()
+        self._sams = dict()
+
+        return
+
+    def __str__(self):
+        r"""String representation of MultiExtendedLLH.
+
+        """
+
+        out_str = "{0:s}\n".format(self.__repr__())
+        out_str += 67*"=" + "\n"
+        out_str += "Number of samples: {0:2d}\n".format(self.N)
+        # loop over all samples
+        if self.N > 0:
+            out_str += "\t{0:>2s} {1:>10s} {2:>8s} {3:>6s}\n".format(
+                            "#", "Name", "Livetime", "Events")
+        N_tot = 0
+        d_tot = 0
+        for num in sorted(self._enum.keys()):
+            N_i = len(self._sams[num].exp)
+            d_i = self._sams[num].livetime
+            N_tot += N_i
+            d_tot += d_i
+            out_str += "\t{0:2d} {1:>10s} {2:8.2f} {3:6d}\n".format(
+                            num, self._enum[num], d_i, N_i)
+        out_str += "Number of events: {0:6d}\n".format(N_tot)
+        out_str += "Total livetime  : {0:9.2f}\n".format(d_tot)
+
+        out_str += 67*"-"+"\n"
+        # loop over all samples
+        for num in sorted(self._sams.keys()):
+            out_str += "Dataset {0:2d}\n".format(num)
+            out_str += 67*"-"+"\n{0:s}\n".format(
+                            "\n\t".join(
+                                [i if len(set(i)) > 2
+                                   else i[:-len("\t".expandtabs())]
+                                 for i in str(self._sams[num]).splitlines()]))
+            out_str += "\n" + 67 * "=" + "\n"
+
+        out_str += "Fit Parameter\tSeed\tBounds\n"
+        pars = self.params
+        seed = self.par_seeds
+        bounds = self.par_bounds
+        for p, s, b in zip(pars, seed, bounds):
+            out_str += "{0:15s}\t{1:.2f}\t{2:.2f} to {3:.2f}\n".format(
+                    p, s, *b)
+        out_str += 67*"-"
+
+        return out_str
+
+    def _select_extended_events(self, **kwargs):
+        r"""Select events around source location(s) used in llh calculation.
+
+        Other parameters
+        ----------------
+        scramble : bool
+            Scramble rightascension prior to selection.
+
+        inject : numpy_structured_array
+            Events to add to the selected events, fields equal to experimental
+            data.
+
+        """
+
+        inject = kwargs.pop("inject", None)
+
+        # inject events according to their parent sample
+        for enum, sam in self._sams.iteritems():
+
+            if isinstance(inject, dict):
+                inj_i = inject.pop(enum, None)
+            else:
+                inj_i = inject
+
+            sam._select_extended_events(inject=inj_i, **kwargs)
+
+        self._n = sum([sam._n for sam in self._sams.itervalues()])
+        self._N = sum([sam._N for sam in self._sams.itervalues()])
+
+        return
+
+    @property
+    def N(self):
+        return len(self._enum)
+
+    @property
+    def enum(self):
+        return self._enum
+
+    @property
+    def gamma_bins(self):
+        return self._gamma_bins
+
+    @gamma_bins.setter
+    def gamma_bins(self, value):
+        value = np.atleast_1d(value)
+        if len(value) < 2:
+            raise ValueError("Need bin definitions!")
+
+        self._gamma_bins = value
+
+        self._gamma_binmids = (value[1:] + value[:-1]) / 2.
+
+        return
+
+    @property
+    def livetime(self):
+        return dict([(enum, sam.livetime)
+                     for enum, sam in self._sams.iteritems()])
+
+    @livetime.setter
+    def livetime(self, val):
+        raise NotImplementedError("Livetime is defined in add sub-classes "
+                                  "PointSourceLLH")
+
+    @property
+    def params(self):
+        # we need to minimize over all parameters given by any likelihood model
+        # gamma will be always minimised over, it is used in the weighting
+        return ["nsources"] + list(set([j for i in self._sams.itervalues()
+                                        for j in i.llh_model.params.keys()]))
+
+    @property
+    def par_bounds(self):
+        # get tightest parameter bounds
+        par_bounds = [np.array([sam.llh_model.params[par][1]
+                                for sam in self._sams.itervalues()
+                                if par in sam.llh_model.params])
+                      for par in self.params[1:]]
+
+        par_bounds = [(np.amax(pb[:, 0]), np.amin(pb[:, 1]))
+                      for pb in par_bounds]
+
+        ns = sum([sam._n for sam in self._sams.itervalues()])
+
+        return np.array([np.array(self.nsource_bounds)]
+                        + par_bounds)
+
+    @property
+    def par_seeds(self):
+        # get median seed for all parameters
+        par_seeds = [np.median([sam.llh_model.params[par][0]
+                                    for sam in self._sams.itervalues()
+                                    if par in sam.llh_model.params])
+                     for par in self.params[1:]]
+
+        N = np.sum([sam._n for sam in self._sams.itervalues()])
+
+        return np.array([min(self.nsource,
+                             N * self.nsource_rho if N > 0 else self.nsource)]
+                         + par_seeds)
+
+    @property
+    def sindec_bins(self):
+        return self._sindec_bins
+
+    @sindec_bins.setter
+    def sindec_bins(self, value):
+        value = np.atleast_1d(value)
+        if len(value) < 2:
+            raise ValueError("Need exact bin-edges!")
+
+        self._sindec_bins = value
+
+        self._sindec_binmids = (value[1:] + value[:-1]) / 2.
+
+        return
+
+    @property
+    def sinDec_range(self):
+        sinDec_range = np.array([sam.llh_model.sinDec_range
+                                 for sam in self._sams.itervalues()])
+
+        return np.array([np.amin(sinDec_range[:, 0]),
+                         np.amax(sinDec_range[:, 1])])
+
+    def add_sample(self, name, obj):
+        r"""Add a PointSourceLLH object to the sample.
+
+        Parameters
+        -----------
+
+        obj : PointSourceLLH
+            PointSourceLLH instance to be used in the multifit
+
+        """
+
+        if not isinstance(obj, PointSourceLLH):
+            raise ValueError("'{0}' is not LLH-style".format(obj))
+
+        if name in self._enum.values():
+            enum = self._enum.keys()[self._enum.values().index(name)]
+            print("Overwrite Sample {0:2d} - {1:s}".format(enum, name))
+        else:
+            enum = max(self._enum) + 1 if self._enum else 0
+
+        self._enum[enum] = name
+        self._sams[enum] = obj
+
+        return
+
+    def llh(self, **fit_pars):
+        r"""LLH for multi-sample is the sum of all Likelihood functions.
+
+        The number of fitted source neutrinos is distributed between
+        the samples according to their effective area at the declination.
+
+        Parameters
+        -----------
+        fit_pars : dict
+            Parameters used for the fit
+
+        Returns
+        --------
+        logLambda : float
+            Log Likelihood value at the point *fit_pars*.
+
+        logLambda_grad : array-like
+            Gradient at the point *fit_pars*.
+
+        """
+
+        #src_dec = self._src_dec
+        src_dec = np.radians(-75.) #TODO make the samples weighted to total mc weights
+        nsources = fit_pars.pop("nsources")
+
+        # get effective area for point in parameter space plus gradients
+
+        w = np.empty(len(self._enum), dtype=np.float)
+        grad_w = np.zeros((len(self._enum), len(self.params) - 1),
+                          dtype=np.float)
+
+        for i, (enum, sam) in enumerate(self._sams.iteritems()):
+            w[i], dw = sam.llh_model.effA(src_dec, **fit_pars)
+
+            if dw is None:
+                continue
+
+            for j, par in enumerate(self.params[1:]):
+                if par not in dw:
+                    continue
+
+                grad_w[i, j] = dw[par]
+
+        # normalize weights to one
+        grad_w /= w.sum()
+        w /= w.sum()
+
+        # normalized sum is bound to one, gradients need to account for
+        # this boundary by cross-talk
+        grad_w -= w[np.newaxis].T * np.sum(grad_w, axis=0)[np.newaxis]
+
+        logLambda = 0.
+        logLambda_grad = np.zeros_like(self.params, dtype=np.float)
+
+        for k, (enum, sam) in enumerate(self._sams.iteritems()):
+
+            w_j = w[k]
+            dw_j = grad_w[k]
+
+            llh, grad_llh = sam.llh(nsources=nsources * w_j, **fit_pars)
+
+            # llh value
+            logLambda += llh
+
+            # llh gradient
+
+            # nsources
+            logLambda_grad[0] += grad_llh[0] * w_j
+
+            # other parameters
+            for i, par in enumerate(self.params[1:]):
+
+                logLambda_grad[i + 1] += grad_llh[0] * nsources * dw_j[i]
+
+                # check if this parameter is part of this samples minimizer
+                if not par in sam.params:
+                    continue
+
+                # get index of parameter
+                idx = sam.params.index(par)
+
+                logLambda_grad[i + 1] += grad_llh[idx]
+
+        return logLambda, logLambda_grad
+
+    def reset(self):
+        r"""Reset all cached values for this class and all stored PS-samples.
+
+        """
+
+        self._src_ra = _src_ra
+        self._src_dec = _src_dec
+
+        for obj in self._sams.itervalues():
+            obj.reset()
+
+        return

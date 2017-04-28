@@ -499,7 +499,6 @@ class PointSourceInjector(Injector):
             if len(enums) == 1 and enums[0] < 0:
                 # only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
-                print(sam_ev)
 
                 yield num, rotate_struct(sam_ev, src_ra, self.src_dec)
                 continue
@@ -859,16 +858,23 @@ class TemplateInjector(Injector):
 
             sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
             keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
-            print(np.sin(src_dec))
-            print(sinDec_bins)
-            dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
+            if np.isscalar(src_dec):
+                dec_bin_nums = np.digitize(np.sin(np.array([src_dec])), sinDec_bins)
+                for i, dec in enumerate(np.array([src_dec])):
+                    mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
+                    probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
+                    sam   = self.random.choice(self.mc_arr[mask], p=probs)
+                    for key in keys:
+                        sam_idx[key][i] = sam[key]
+            else:
+                dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
+                for i, dec in enumerate(src_dec):
+                    mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
+                    probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
+                    sam   = self.random.choice(self.mc_arr[mask], p=probs)
+                    for key in keys:
+                        sam_idx[key][i] = sam[key]
 
-            for i, dec in enumerate(src_dec):
-                mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
-                probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
-                sam   = self.random.choice(self.mc_arr[mask], p=probs)
-                for key in keys:
-                    sam_idx[key][i] = sam[key]
 
             # get the events that were sampled
             enums = np.unique(sam_idx["enum"])
