@@ -206,7 +206,7 @@ class PointSourceLLH(object):
 
     def __init__(self, exp, mc, livetime, scramble=True, upscale=False,
                  background = None, template_map = None, sigma_bins = None,
-                 scrambled_src_map = None, src_map = None, coords = 'equatorial', **kwargs):
+                 scrambled_src_map = None, coords = 'equatorial', **kwargs):
         r"""Constructor of `PointSourceLikelihood`.
 
         Fill the class with data and all necessary configuration.
@@ -338,8 +338,8 @@ class PointSourceLLH(object):
         self.scrambled_src_map = scrambled_src_map
         self.template_map = template_map
         self.sigma_bins   = sigma_bins
-        self.src_map      = src_map
         self.coords       = coords
+        self.sample_weights  = np.array([1])
 
         return
 
@@ -1104,7 +1104,8 @@ class PointSourceLLH(object):
         else:
             result = []
             for i, sam in enumerate(samples):
-                print(i)
+                if i%100 ==0:
+                    print(i)
                 result.append(self.fit_extended_source(inject=sam, scramble=True, **kwargs))
             #result = [self.fit_extended_source(inject=sam, scramble=True, **kwargs)
             #          for sam in samples]
@@ -1145,6 +1146,8 @@ class PointSourceLLH(object):
 
         assert(n == len(self._ev))
 
+        w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
+
         if self.scrambled_src_map is not None:
             S_sc      = self.llh_model.signal_sc(self.scrambled_src_map, self._ev, coords = self.coords)
             B         = (1/w)*(1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
@@ -1152,7 +1155,6 @@ class PointSourceLLH(object):
         else:
             SoB = self._ev_S / self._ev["B"]
 
-        w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
 
         x = (SoB - 1.) / N
 
@@ -1887,7 +1889,7 @@ class PointSourceLLH(object):
 
         return result
 
-    def extended_sensitivity(self, dec_bins, alpha, beta, inj, mc, **kwargs):
+    def extended_sensitivity(self, dec_bins, alpha, beta, inj, mc, src_map, **kwargs):
         """Calculate extended source sensitivity for a given source
         hypothesis using weights.
 
@@ -1909,6 +1911,9 @@ class PointSourceLLH(object):
             Monte Carlo to use for injection. Needs all fields that
             is stored in experimental data, plus true information that the
             injector uses: trueRa, trueDec, trueE, ow
+        src_map:  normalized map used for signal injection.  Multiple samples
+            should have each map stored in a dictionary with keys 0,1,2, etc.
+            for each sample
 
         Returns
         -------
@@ -1975,7 +1980,7 @@ class PointSourceLLH(object):
 
                 n_inj = int(np.mean(trials["n_inj"])) if len(trials) > 0 else 0
                 while True:
-                    n_inj, sample = inj.sample(self.src_map, n_inj + 1, dec_bins, coords = self.coords, poisson=False).next()
+                    n_inj, sample = inj.sample(self.sample_weights, src_map, n_inj + 1, dec_bins, coords = self.coords, poisson=False).next()
 
                     TS_i, xmin_i = self.fit_extended_source(inject=sample, scramble=True)
 
@@ -2005,7 +2010,7 @@ class PointSourceLLH(object):
                 # do trials around active region
                 trials = np.append(trials,
                                    self.do_extended_trials(n_iter=n_iter,
-                                                           mu=inj.sample(self.src_map, mu_eff, dec_bins, coords = self.coords),
+                                                           mu=inj.sample(self.sample_weights, src_map, mu_eff, dec_bins, coords = self.coords),
                                                            **kwargs))
 
 
@@ -2068,7 +2073,7 @@ class PointSourceLLH(object):
 
                 # do trials with best estimate
                 trials = np.append(trials, self.do_extended_trials(
-                                   mu=inj.sample(self.src_map, mu_eff, dec_bins, coords = self.coords), n_iter=n_iter, **kwargs))
+                                   mu=inj.sample(self.sample_weights, src_map, mu_eff, dec_bins, coords = self.coords), n_iter=n_iter, **kwargs))
 
                 sys.stdout.flush()
 
@@ -2579,6 +2584,7 @@ class MultiPointSourceLLH(PointSourceLLH):
         """
 
         src_dec = self._src_dec
+
         nsources = fit_pars.pop("nsources")
 
         # get effective area for point in parameter space plus gradients
@@ -2897,6 +2903,11 @@ class MultiExtendedLLH(PointSourceLLH):
 
         self._enum[enum] = name
         self._sams[enum] = obj
+        self.sample_weights  = np.array([self._sams[key].llh_model.total_mc_weight()[0] for key in self._sams.keys()]) 
+        self.sample_weights /= np.sum(self.sample_weights)
+        print(self.sample_weights)
+        self.coords = obj.coords
+        print(self.coords)
 
         return
 
@@ -2921,8 +2932,6 @@ class MultiExtendedLLH(PointSourceLLH):
 
         """
 
-        #src_dec = self._src_dec
-        src_dec = np.radians(-75.) #TODO make the samples weighted to total mc weights
         nsources = fit_pars.pop("nsources")
 
         # get effective area for point in parameter space plus gradients
@@ -2932,7 +2941,7 @@ class MultiExtendedLLH(PointSourceLLH):
                           dtype=np.float)
 
         for i, (enum, sam) in enumerate(self._sams.iteritems()):
-            w[i], dw = sam.llh_model.effA(src_dec, **fit_pars)
+            w[i], dw = sam.llh_model.total_mc_weight(**fit_pars)
 
             if dw is None:
                 continue

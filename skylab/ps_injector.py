@@ -806,7 +806,7 @@ class TemplateInjector(Injector):
                     * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
                     * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
 
-    def sample(self, template, mean_mu, sinDec_bins, poisson=True, coords = 'equatorial'):
+    def sample(self, sample_probs, template, mean_mu, sinDec_bins, poisson=True, coords = 'equatorial'):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
@@ -829,6 +829,11 @@ class TemplateInjector(Injector):
 
         """
 
+        if not isinstance(template, dict):
+            template = {-1: template}
+            all_enums = [-1]
+        else:
+            all_enums = range(len(sample_probs))
 
         # generate event numbers using poissonian events
         while True:
@@ -843,38 +848,49 @@ class TemplateInjector(Injector):
                 yield num, None
                 continue
 
-            nside   = hp.get_nside(template)
-            npix    = hp.nside2npix(nside)
-            src_pix = self.random.choice(npix, size=num, p=template)
-
-            if coords == 'galactic':
-                theta_gal, phi_gal = hp.pix2ang(nside, src_pix)
-                theta_eq, phi_eq   = hp.Rotator(coord = ['G','C'], rot = [0,0])(theta_gal, phi_gal)
-                src_dec            = np.pi/2. - theta_eq 
-                src_ra             = phi_eq - np.pi
-            else:
-                theta_eq, src_ra = hp.pix2ang(nside, src_pix)
-                src_dec          = np.pi/2. - theta_eq 
-
+            enums_list     = self.random.choice(all_enums, size=num, p = sample_probs)
+            num_per_sample = np.array([len(enums_list[enums_list==i]) for i in all_enums])
             sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
             keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
-            if np.isscalar(src_dec):
-                dec_bin_nums = np.digitize(np.sin(np.array([src_dec])), sinDec_bins)
-                for i, dec in enumerate(np.array([src_dec])):
-                    mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
-                    probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
-                    sam   = self.random.choice(self.mc_arr[mask], p=probs)
-                    for key in keys:
-                        sam_idx[key][i] = sam[key]
-            else:
-                dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
-                for i, dec in enumerate(src_dec):
-                    mask  = np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
-                    probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
-                    sam   = self.random.choice(self.mc_arr[mask], p=probs)
-                    for key in keys:
-                        sam_idx[key][i] = sam[key]
+            tot = 0
+            tot_src_ra   = dict()
+            tot_src_dec  = dict()
 
+            for enum in all_enums:
+                num = num_per_sample[enum]
+                if num == 0:
+                    continue
+
+                nside   = hp.get_nside(template[enum])
+                npix    = hp.nside2npix(nside)
+            
+                src_pix = self.random.choice(npix, size=num, p=template[enum])
+
+                if coords == 'galactic':
+                    theta_gal, phi_gal = hp.pix2ang(nside, src_pix)
+                    theta_eq, phi_eq   = hp.Rotator(coord = ['G','C'], rot = [0,0])(theta_gal, phi_gal)
+                    src_dec            = np.pi/2. - theta_eq 
+                    src_ra             = phi_eq - np.pi
+                else:
+                    theta_eq, src_ra = hp.pix2ang(nside, src_pix)
+                    src_dec          = np.pi/2. - theta_eq 
+
+                tot_src_ra[enum] = src_ra
+                tot_src_dec[enum] = src_dec
+
+                if np.isscalar(src_dec):
+                    src_dec = np.array([src_dec])
+
+                dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
+
+                for i, dec in enumerate(src_dec):
+                    mask  = np.equal(self.mc_arr['enum'],enum)&np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
+                    probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
+                    sam   = self.random.choice(self.mc_arr[mask], p=probs)
+                    for key in keys:
+                        sam_idx[key][tot] = sam[key]
+
+                    tot += 1
 
             # get the events that were sampled
             enums = np.unique(sam_idx["enum"])
@@ -890,7 +906,7 @@ class TemplateInjector(Injector):
             for enum in enums:
                 idx = sam_idx[sam_idx["enum"] == enum]["idx"]
                 sam_ev_i = np.copy(self.mc[enum][idx])
-                sam_ev[enum] = rotate_struct(sam_ev_i, src_ra, src_dec)
+                sam_ev[enum] = rotate_struct(sam_ev_i, tot_src_ra[enum], tot_src_dec[enum])
 
             yield num, sam_ev
 

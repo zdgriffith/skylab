@@ -267,6 +267,9 @@ class ClassicLLH(NullModel):
         self._spl_effA = scipy.interpolate.InterpolatedUnivariateSpline(
                 (bins[1:] + bins[:-1]) / 2., np.log(h), k=self.order)
 
+        # save total mc weight for correct signal proportions in multi year extended source
+        self._total_mc_weight = w.sum()
+
         return
 
     @property
@@ -339,6 +342,12 @@ class ClassicLLH(NullModel):
             return 0., None
 
         return self._spl_effA(np.sin(dec)), None
+
+    def total_mc_weight(self, **params):
+        r"""save total mc weight for correct signal proportions in multi year extended source
+
+        """
+        return self._total_mc_weight, None
 
     def reset(self):
         r"""Classic likelihood does only depend on spatial part, needs no
@@ -846,6 +855,9 @@ class PowerLawLLH(WeightLLH):
         """
 
         gamma_vals = pars["gamma"]
+
+        w = self._get_weights(mc, gamma=gamma_vals[1])*livetime * 86400. #2nd element is always given alpha
+        self._total_mc_weight = w.sum()
 
         x = np.sin(mc["trueDec"])
         hist = np.vstack([np.histogram(x,
