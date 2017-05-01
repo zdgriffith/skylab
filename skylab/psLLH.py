@@ -2905,9 +2905,7 @@ class MultiExtendedLLH(PointSourceLLH):
         self._sams[enum] = obj
         self.sample_weights  = np.array([self._sams[key].llh_model.total_mc_weight()[0] for key in self._sams.keys()]) 
         self.sample_weights /= np.sum(self.sample_weights)
-        print(self.sample_weights)
         self.coords = obj.coords
-        print(self.coords)
 
         return
 
