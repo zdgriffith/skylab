@@ -663,7 +663,7 @@ class TemplateInjector(Injector):
         angles and declination bands have to be re-set.
 
         """
-        print("setting up")
+
         # solid angle of selected events
         self._min_dec = np.arcsin(self._sinDec_range[0])
         self._max_dec = np.arcsin(self._sinDec_range[1])
