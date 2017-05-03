@@ -96,8 +96,13 @@ def rotate_struct(ev, ra, dec):
         rot["dec"] = rot_dec
     rot["sinDec"] = np.sin(rot_dec)
 
-    # "delete" Monte Carlo information from sampled events
-    mc = ["trueRa", "trueDec", "trueE", "ow"]
+    # exp information to save
+    exp = ["dec", "sinDec", "ra", "logE", "sigma"]
+
+    # mc information to delete
+    mc = []
+    for name in names:
+      if name not in exp: mc.append(name)
 
     return drop_fields(rot, mc)
 
@@ -155,7 +160,6 @@ class PointSourceInjector(Injector):
     _sinDec_range = [-1., 1.]
 
     _E0 = 1.
-    _GeV = 1.e3
     _e_range = [0., np.inf]
 
     _random = np.random.RandomState()
@@ -232,16 +236,6 @@ class PointSourceInjector(Injector):
         if np.diff(val) <= 0:
             raise ValueError("Energy range has to be increasing")
         self._e_range = [float(val[0]), float(val[1])]
-        return
-
-    @property
-    def GeV(self):
-        return self._GeV
-
-    @GeV.setter
-    def GeV(self, value):
-        self._GeV = float(value)
-
         return
 
     @property
@@ -336,13 +330,22 @@ class PointSourceInjector(Injector):
         return
 
     def _weights(self):
-        r"""Setup weights for given models.
+        r"""Setup weights for simple power law model:
 
+                 dN/dE = A (E / E0)^-gamma
+
+            where A has units of events / (GeV cm^2 s). We treat
+            the 'events' in the numerator as implicit and say the
+            units are [GeV^-1 cm^-2 s^-1].
+
+            The units of A balance with One Weight [GeV cm^2 sr] * Livetime [s] / Solid Angle [sr]
+            to yield the number of events expected in the given livetime.
+            We leave out A for now because we multiply by it later.
         """
-        # weights given in days, weighted to the point source flux
-        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
+        # energy scaled weights (everything but A)
+        self.mc_arr["ow"] *= (self.mc_arr["trueE"] / self.E0)**(-self.gamma) / self._omega # [GeV cm^2 s]
 
-        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
+        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float) # [GeV cm^2 s]
 
         # normalized weights for probability
         self._norm_w = self.mc_arr["ow"] / self._raw_flux
@@ -386,8 +389,8 @@ class PointSourceInjector(Injector):
             # get MC event's in the selected energy and sinDec range
             band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
                          &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
-            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
-                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
+            band_mask &= ((mc_i["trueE"] > self.e_range[0])
+                          &(mc_i["trueE"] < self.e_range[1]))
 
             if not np.any(band_mask):
                 print("Sample {0:d}: No events were selected!".format(key))
@@ -419,41 +422,28 @@ class PointSourceInjector(Injector):
         return
 
     def flux2mu(self, flux):
-        r"""Convert a flux to mean number of expected events.
-
-        Converts a flux :math:`\Phi_0` to the mean number of expected
-        events using the spectral index :math:`\gamma`, the
-        specified energy unit `x GeV` and the point of normalization `E0`.
+        r"""Convert a flux normalization to mean number of expected events.
 
         The flux is calculated as follows:
 
         .. math::
 
-            \frac{d\Phi}{dE}=\Phi_0\,E_0^{2-\gamma}
-                                \left(\frac{E}{E_0}\right)^{-\gamma}
+            \frac{dN}{dE} = A \left( \frac{E}{E_0} \right)^{-\gamma}
 
-        In this way, the flux will be equivalent to a power law with
-        index of -2 at the normalization energy `E0`.
+        A has units of events / (GeV cm^2 s) but we treat it as
+        [GeV^-1 cm^-2 s^-1] because the 'events' are implicit
 
         """
 
-        gev_flux = (flux
-                        * (self.E0 * self.GeV)**(self.gamma - 1.)
-                        * (self.E0)**(self.gamma - 2.))
-
-        return self._raw_flux * gev_flux
+        return self._raw_flux * A # [events]
 
     def mu2flux(self, mu):
-        r"""Calculate the corresponding flux in [*GeV*^(gamma - 1) s^-1 cm^-2]
+        r"""Calculate the corresponding flux normalization [GeV^-1 cm^-2 s^-1]
         for a given number of mean source events.
 
         """
 
-        gev_flux = mu / self._raw_flux
-
-        return (gev_flux
-                    * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
-                    * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
+        return mu / self._raw_flux # [GeV^-1 cm^-2 s^-1]
 
     def sample(self, src_ra, mean_mu, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
@@ -520,7 +510,6 @@ class TemplateInjector(Injector):
     _sinDec_range = [-1., 1.]
 
     _E0 = 1.
-    _GeV = 1.e3
     _e_range = [0., np.inf]
 
     _random = np.random.RandomState()
@@ -545,6 +534,9 @@ class TemplateInjector(Injector):
 
         # Set all other attributes passed to the class
         set_pars(self, **kwargs)
+ 
+        if 'sinDec_bandwidth' not in kwargs:
+          self._setup()
 
         return
 
@@ -597,16 +589,6 @@ class TemplateInjector(Injector):
         if np.diff(val) <= 0:
             raise ValueError("Energy range has to be increasing")
         self._e_range = [float(val[0]), float(val[1])]
-        return
-
-    @property
-    def GeV(self):
-        return self._GeV
-
-    @GeV.setter
-    def GeV(self, value):
-        self._GeV = float(value)
-
         return
 
     @property
@@ -681,7 +663,7 @@ class TemplateInjector(Injector):
         angles and declination bands have to be re-set.
 
         """
-
+        print("setting up")
         # solid angle of selected events
         self._min_dec = np.arcsin(self._sinDec_range[0])
         self._max_dec = np.arcsin(self._sinDec_range[1])
@@ -690,13 +672,22 @@ class TemplateInjector(Injector):
         return
 
     def _weights(self):
-        r"""Setup weights for given models.
+        r"""Setup weights for simple power law model:
 
+                 dN/dE = A (E / E0)^-gamma
+
+            where A has units of events / (GeV cm^2 s). We treat
+            the 'events' in the numerator as implicit and say the
+            units are [GeV^-1 cm^-2 s^-1].
+
+            The units of A balance with One Weight [GeV cm^2 sr] * Livetime [s] / Solid Angle [sr]
+            to yield the number of events expected in the given livetime.
+            We leave out A for now because we multiply by it later.
         """
-        # weights given in days, weighted to the point source flux
-        self.mc_arr["ow"] *= self.mc_arr["trueE"]**(-self.gamma) / self._omega
+        # energy scaled weights (everything but A)
+        self.mc_arr["ow"] *= (self.mc_arr["trueE"] / self.E0)**(-self.gamma) / self._omega # [GeV cm^2 s]
 
-        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
+        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float) # [GeV cm^2 s]
 
         # normalized weights for probability
         self._norm_w = self.mc_arr["ow"] / self._raw_flux
@@ -724,6 +715,11 @@ class TemplateInjector(Injector):
         if isinstance(mc, dict) ^ isinstance(livetime, dict):
             raise ValueError("mc and livetime not compatible")
 
+        if not "sinDec" in mc.dtype.fields:
+            mc = np.lib.recfunctions.append_fields(
+                    mc, "sinDec", np.sin(mc["dec"]),
+                    dtypes=np.float, usemask=False)
+
         self.mc = dict()
         self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
                                          ("trueE", np.float), ("ow", np.float),
@@ -737,8 +733,8 @@ class TemplateInjector(Injector):
             # get MC event's in the selected energy and sinDec range
             band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
                          &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
-            band_mask &= ((mc_i["trueE"] / self.GeV > self.e_range[0])
-                          &(mc_i["trueE"] / self.GeV < self.e_range[1]))
+            band_mask &= ((mc_i["trueE"] > self.e_range[0])
+                          &(mc_i["trueE"] < self.e_range[1]))
 
             if not np.any(band_mask):
                 print("Sample {0:d}: No events were selected!".format(key))
@@ -770,41 +766,28 @@ class TemplateInjector(Injector):
         return
 
     def flux2mu(self, flux):
-        r"""Convert a flux to mean number of expected events.
-
-        Converts a flux :math:`\Phi_0` to the mean number of expected
-        events using the spectral index :math:`\gamma`, the
-        specified energy unit `x GeV` and the point of normalization `E0`.
+        r"""Convert a flux normalization to mean number of expected events.
 
         The flux is calculated as follows:
 
         .. math::
 
-            \frac{d\Phi}{dE}=\Phi_0\,E_0^{2-\gamma}
-                                \left(\frac{E}{E_0}\right)^{-\gamma}
+            \frac{dN}{dE} = A \left( \frac{E}{E_0} \right)^{-\gamma}
 
-        In this way, the flux will be equivalent to a power law with
-        index of -2 at the normalization energy `E0`.
+        A has units of events / (GeV cm^2 s) but we treat it as
+        [GeV^-1 cm^-2 s^-1] because the 'events' are implicit
 
         """
 
-        gev_flux = (flux
-                        * (self.E0 * self.GeV)**(self.gamma - 1.)
-                        * (self.E0)**(self.gamma - 2.))
-
-        return self._raw_flux * gev_flux
+        return self._raw_flux * A # [events]
 
     def mu2flux(self, mu):
-        r"""Calculate the corresponding flux in [*GeV*^(gamma - 1) s^-1 cm^-2]
+        r"""Calculate the corresponding flux normalization [GeV^-1 cm^-2 s^-1]
         for a given number of mean source events.
 
         """
 
-        gev_flux = mu / self._raw_flux
-
-        return (gev_flux
-                    * self.GeV**(1. - self.gamma) # turn from I3Unit to *GeV*
-                    * self.E0**(2. - self.gamma)) # go from 1*GeV* to E0
+        return mu / self._raw_flux # [GeV^-1 cm^-2 s^-1]
 
     def sample(self, sample_probs, template, mean_mu, sinDec_bins, poisson=True, coords = 'equatorial'):
         r""" Generator to get sampled events for a Point Source location.
@@ -964,11 +947,12 @@ class ModelInjector(PointSourceInjector):
         r"""Calculate weights, according to given flux parametrization.
 
         """
-
-        trueLogGeV = np.log10(self.mc_arr["trueE"]) - np.log10(self.GeV)
+        print("This part of the code is untested. Check ps_injector.py")
+        exit(0)
+        trueLogGeV = np.log10(self.mc_arr["trueE"])
 
         logF = self._spline(trueLogGeV)
-        flux = np.power(10., logF - 2. * trueLogGeV) / self.GeV
+        flux = np.power(10., logF - 2. * trueLogGeV)
 
         # remove NaN's, etc.
         m = (flux > 0.) & np.isfinite(flux)
