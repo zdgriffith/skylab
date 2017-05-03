@@ -156,7 +156,7 @@ class PointSourceInjector(Injector):
 
     """
     _src_dec = np.nan
-    _sinDec_bandwidth = 0.1
+    _sinDec_bandwidth = np.sin(1/180.*np.pi)
     _sinDec_range = [-1., 1.]
 
     _E0 = 1.
@@ -506,7 +506,7 @@ class TemplateInjector(Injector):
 
     """
     _src_dec = np.nan
-    _sinDec_bandwidth = 0.1
+    _sinDec_bandwidth = np.sin(1/180.*np.pi)
     _sinDec_range = [-1., 1.]
 
     _E0 = 1.
