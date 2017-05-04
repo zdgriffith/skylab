@@ -152,7 +152,7 @@ class ClassicLLH(NullModel):
 
     _gamma = 2.
 
-    useMCbackground = False
+    MCbackground = None
 
     def __init__(self, *args, **kwargs):
         r"""Constructor of ClassicLLH. Set all configurations here.
@@ -182,13 +182,15 @@ class ClassicLLH(NullModel):
 
         """
 
-        if self.useMCbackground == False:
+        if self.MCbackground == None: # use data for background PDF
           hist, bins = np.histogram(exp["sinDec"], density=True,
                                     bins=self.sinDec_bins,
                                     range=self.sinDec_range)
-        else:
+        else: # use simulation for background PDF
+          w = np.zeros(len(mc), dtype=float)
+          for name in self.MCbackground: w = w + mc[name]
           hist, bins = np.histogram(mc["sinDec"], density=True,
-                                    weights=mc["conv"] + mc["astro"],
+                                    weights=w,
                                     bins=self.sinDec_bins,
                                     range=self.sinDec_range)
 
