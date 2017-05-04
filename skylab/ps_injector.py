@@ -468,17 +468,17 @@ class PointSourceInjector(Injector):
         Optional Parameters
         --------------------
         poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+            Use poisson fluctuations, otherwise sample exactly *mean_signal*
 
         """
 
         # generate event numbers using poissonian events
         while True:
-            num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+            num = (self.random.poisson(mean_signal)
+                        if poisson else int(np.around(mean_signal)))
 
             logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_mu))
+                          "of mean {1:5.1f} sources").format(num, mean_signal))
 
             # if no events should be sampled, return nothing
             if num < 1:
