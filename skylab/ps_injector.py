@@ -445,13 +445,13 @@ class PointSourceInjector(Injector):
 
         return mu / self._raw_flux # [GeV^-1 cm^-2 s^-1]
 
-    def sample(self, src_ra, mean_mu, poisson=True):
+    def sample(self, src_ra, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
         -----------
-        mean_mu : float
-            Mean number of events to sample
+        mean_signal : float
+            Mean number of signal events to sample
 
         Returns
         --------
@@ -464,17 +464,17 @@ class PointSourceInjector(Injector):
         Optional Parameters
         --------------------
         poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+            Use poisson fluctuations, otherwise sample exactly *mean_signal*
 
         """
 
         # generate event numbers using poissonian events
         while True:
-            num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+            num = (self.random.poisson(mean_signal)
+                        if poisson else int(np.around(mean_signal)))
 
             logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_mu))
+                          "of mean {1:5.1f} sources").format(num, mean_signal))
 
             # if no events should be sampled, return nothing
             if num < 1:
@@ -515,12 +515,21 @@ class TemplateInjector(Injector):
     _random = np.random.RandomState()
     _seed = None
 
-    def __init__(self, gamma, **kwargs):
+    def __init__(self, template, sinDec_bins, coords, gamma, **kwargs):
         r"""Constructor. Initialize the Injector class with basic
         characteristics regarding a point source.
 
         Parameters
         -----------
+        template : healpix map as numpy array (all the keywords...)
+            Signal map *without* smoothing.
+
+        sinDec_bins : numpy array
+            Sin(declination) bins.
+
+        coords : str
+            Coordinate system of template map ('equatorial' or 'galactic').
+
         gamma : float
             Spectral index, positive values for falling spectra
 
@@ -531,12 +540,50 @@ class TemplateInjector(Injector):
 
         # source properties
         self.gamma = gamma
+        self.template = template
+        self.sinDec_bins = sinDec_bins
+        self.coords = coords
+
+        # min and max dec of template
+        nside  = hp.get_nside(self.template)
+        npix   = hp.nside2npix(nside)
+        pixelr = np.sqrt( 1./(3.*nside*nside) )
+
+        if 'sinDec_bandwidth' not in kwargs:
+          self._setup()
 
         # Set all other attributes passed to the class
         set_pars(self, **kwargs)
- 
-        if 'sinDec_bandwidth' not in kwargs:
-          self._setup()
+
+        # compute declination range of template
+        min_dec =  1
+        max_dec = -1
+        for p in range(npix):
+
+          # skip empty pixels
+          if self.template[p] <= 0: continue
+
+          # coordinates of pixel in equatorial map
+          (th, ph) = hp.pix2ang(nside,p)
+
+          # compute declination
+          dec = np.pi/2 - th
+          if min_dec > dec - pixelr: min_dec = dec - pixelr
+          if max_dec < dec + pixelr: max_dec = dec + pixelr
+
+        # add fudge factors
+        min_dec -= np.arcsin(self._sinDec_bandwidth)
+        if (min_dec < -np.pi/2):
+          min_dec = -np.pi/2
+        max_dec += np.arcsin(self._sinDec_bandwidth)
+        if (max_dec >  np.pi/2):
+          max_dec =  np.pi/2
+
+        self._sinDec_range = [np.sin(min_dec), np.sin(max_dec)]
+        delta = self._sinDec_range[1] - self._sinDec_range[0]
+
+        if delta < self._sinDec_bandwidth:
+          raise ValueError("SinDec range too small. Must be at least %.2e" % self._sinDec_bandwidth)
 
         return
 
@@ -789,13 +836,13 @@ class TemplateInjector(Injector):
 
         return mu / self._raw_flux # [GeV^-1 cm^-2 s^-1]
 
-    def sample(self, sample_probs, template, mean_mu, sinDec_bins, poisson=True, coords = 'equatorial'):
+    def sample(self, sample_probs, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
         -----------
-        mean_mu : float
-            Mean number of events to sample
+        mean_signal : float
+            Mean number of signal events to sample
 
         Returns
         --------
@@ -808,23 +855,23 @@ class TemplateInjector(Injector):
         Optional Parameters
         --------------------
         poisson : bool
-            Use poisson fluctuations, otherwise sample exactly *mean_mu*
+            Use poisson fluctuations, otherwise sample exactly *mean_signal*
 
         """
 
-        if not isinstance(template, dict):
-            template = {-1: template}
+        if not isinstance(self.template, dict):
+            self.template = {-1: self.template}
             all_enums = [-1]
         else:
             all_enums = range(len(sample_probs))
 
         # generate event numbers using poissonian events
         while True:
-            num = (self.random.poisson(mean_mu)
-                        if poisson else int(np.around(mean_mu)))
+            num = (self.random.poisson(mean_signal)
+                        if poisson else int(np.around(mean_signal)))
 
             logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_mu))
+                          "of mean {1:5.1f} sources").format(num, mean_signal))
 
             # if no events should be sampled, return nothing
             if num < 1:
@@ -844,12 +891,12 @@ class TemplateInjector(Injector):
                 if num == 0:
                     continue
 
-                nside   = hp.get_nside(template[enum])
+                nside   = hp.get_nside(self.template[enum])
                 npix    = hp.nside2npix(nside)
             
-                src_pix = self.random.choice(npix, size=num, p=template[enum])
+                src_pix = self.random.choice(npix, size=num, p=self.template[enum])
 
-                if coords == 'galactic':
+                if self.coords == 'galactic':
                     theta_gal, phi_gal = hp.pix2ang(nside, src_pix)
                     theta_eq, phi_eq   = hp.Rotator(coord = ['G','C'], rot = [0,0])(theta_gal, phi_gal)
                     src_dec            = np.pi/2. - theta_eq 
@@ -864,7 +911,7 @@ class TemplateInjector(Injector):
                 if np.isscalar(src_dec):
                     src_dec = np.array([src_dec])
 
-                dec_bin_nums = np.digitize(np.sin(src_dec), sinDec_bins)
+                dec_bin_nums = np.digitize(np.sin(src_dec), self.sinDec_bins)
 
                 for i, dec in enumerate(src_dec):
                     mask  = np.equal(self.mc_arr['enum'],enum)&np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
