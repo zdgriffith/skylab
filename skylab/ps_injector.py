@@ -449,13 +449,13 @@ class PointSourceInjector(Injector):
 
         return mu / self._raw_flux # [GeV^-1 cm^-2 s^-1]
 
-    def sample(self, src_ra, mean_mu, poisson=True):
+    def sample(self, src_ra, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
         Parameters
         -----------
-        mean_mu : float
-            Mean number of events to sample
+        mean_signal : float
+            Mean number of signal events to sample
 
         Returns
         --------
