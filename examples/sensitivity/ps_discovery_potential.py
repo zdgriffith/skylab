@@ -6,29 +6,13 @@
 #         Rene Reimann's diffuse muon neutrino sample. Discovery potential
 #         flux is the flux required for a 5 sigma detection 50% of the time.
 #
-# @dependencies
-#   /home/jwood/public_html/joint-icecube-hawc/icecube-ana/diffuse-dataset/diffuse_dataset.py
 ###############################################################################
 
-import sys
 import numpy 
-import diffuse_dataset
 
 from   skylab.psLLH       import PointSourceLLH
 from   skylab.ps_model    import ClassicLLH
 from   skylab.ps_injector import PointSourceInjector
-from   math               import sin
-
-###############################################################################
-
-# @function Print()
-# @brief    Print to screen and log file
-def Print(string, log):
-
-  print string
-  log.write(string + '\n')
-
-# END Print()
 
 ###############################################################################
 
@@ -54,11 +38,22 @@ TeV = 1000*GeV
 
 import argparse
 
+# See http://icecube.wisc.edu/~jwood/joint-icecube-hawc/icecube-ana/diffuse-dataset/#files
+# The paths below should work at the UW cluster.
+
+expfile = "/home/jwood/public_html/joint-icecube-hawc/icecube-ana/diffuse-dataset/IC86_2012_13_14_15_wChargeCorrection_exp_compressed.npy"
+mcfile  = "/home/jwood/public_html/joint-icecube-hawc/icecube-ana/diffuse-dataset/IC86_2012_13_14_15_11029_11069_11070_best_fit_7yr_compressed.npy"
+
+defaultexp = [expfile, "1423.867"]
+defaultmc  = mcfile
+
 p = argparse.ArgumentParser(description="Calculates Discovery Potential" + \
                                         "at Given Declination",
                             formatter_class=argparse.RawTextHelpFormatter)
-p.add_argument("--season", default="IC86, 2012-15",
-                help="Season name (default=\"IC86, 2012-15\")") 
+p.add_argument("--exp", default=defaultexp, nargs=2, type=str,
+                help="Path to .npy data file\n(default= %s %s)" % (defaultexp[0], defaultexp[1])) 
+p.add_argument("--mc", default=defaultmc,
+                help="Path to .npy mc file\n(default= %s)" % defaultmc) 
 p.add_argument("--dec", default=0.0, type=float,
                 help="Source declination in J2000 epoch [deg] (default=0)")
 p.add_argument("--ra", default=180.0, type=float,
@@ -82,12 +77,9 @@ p.add_argument("--useEXPbackground", action='store_true',
 
 args = p.parse_args()
 
-(livetime, expfile, mcfile, tag) = diffuse_dataset.season(args.season)
-
-exp = numpy.load(expfile)
-mc  = numpy.load(mcfile)
-
-log = open((tag + "dec%+06.2f_index%.2f_ps_discovery_potential.log") % (args.dec, args.index), "w", 0)
+exp      = numpy.load(args.exp[0])
+mc       = numpy.load(args.mc)
+livetime = float(args.exp[1])
 
 #############
 # ARGUMENTS #
@@ -99,7 +91,7 @@ log = open((tag + "dec%+06.2f_index%.2f_ps_discovery_potential.log") % (args.dec
 # DECLINATION BINS #
 ####################
 
-sinDec_min  = -sin(5*deg2rad)
+sinDec_min  = -numpy.sin(5*deg2rad)
 sinDec_max  = 1.
 nbin        = 60+1
 bin_width   = (sinDec_max - sinDec_min)/nbin
@@ -151,7 +143,7 @@ inj.fill(src_dec, mc, livetime)
 # 5 SIGMA SEARCH #
 ##################
 
-Print("\nSearching for 5 sigma ... ", log)
+print "\nSearching for 5 sigma ... "
 ns_min = args.ns_bounds[0]
 ns_max = args.ns_bounds[1]
 nstep  = 10
@@ -185,7 +177,7 @@ for step in range(0,nstep+1):
   # compute average significance
   sigma = numpy.sqrt(avgTS)
 
-  Print(" [%3d/%d] ns %7.2f, sigma %6.2f" % (step+1, nstep+1, ns, sigma), log)
+  print " [%3d/%d] ns %7.2f, sigma %6.2f" % (step+1, nstep+1, ns, sigma)
 
   results[0][step] = ns                  # x
   results[1][step] = sigma               # y
@@ -200,7 +192,7 @@ p1, p0 = numpy.polyfit(results[0],     # x = ns
                        w = results[2]) # 1/error = sqrt(nsample)
 
 ns_5sigma = (5 - p0) / p1
-Print("Rough Estimate: ns = %.2f @ 5 sigma" % ns_5sigma, log)
+print "Rough Estimate: ns = %.2f @ 5 sigma" % ns_5sigma
 
 ##################
 # 5 SIGMA SEARCH #
@@ -212,7 +204,7 @@ Print("Rough Estimate: ns = %.2f @ 5 sigma" % ns_5sigma, log)
 # DISCOVERY POTENTIAL SEARCH #
 ##############################
 
-Print("\nSearching for Discovery Threshold (50% >= 5 sigma) ... ", log)
+print "\nSearching for Discovery Threshold (50% >= 5 sigma) ... "
 
 if ns_5sigma > 10:
   ns_min = 0.5*ns_5sigma
@@ -236,7 +228,6 @@ for step in range(0, nstep+1):
   # compute number of discoveries over 100 samples
   nsample = args.nsample
   ndisc   = 0
-  avg_ni  = 0
   for i in range(0,nsample):
 
     # get event sample for source
@@ -244,23 +235,22 @@ for step in range(0, nstep+1):
 
     # compute TS
     TS, Xmin = psllh.fit_source(src_ra,src_dec,inject=sample,scramble = True)
-#    print "  - [%d] ni %.2f, sigma %.2f" % (step, ni, np.sqrt(TS))
-    if numpy.sqrt(TS) >= 5: ndisc = ndisc + 1
 
-    avg_ni = avg_ni + float(ni)/nsample
+    # count discoveries
+    if numpy.sqrt(TS) >= 5: ndisc = ndisc + 1
 
   # END for (i)
 
   P = float(ndisc)/nsample
-  Print(" [%3d/%d] ns %.2f, discoveries %3d/%d = %.2f" % (step+1, nstep+1, ns, ndisc, nsample, P), log)
+  print " [%3d/%d] ns %.2f, discoveries %3d/%d = %.2f" % (step+1, nstep+1, ns, ndisc, nsample, P)
 
   if (P > 0.5 and ns < ns_upper): ns_upper = ns
   if (P < 0.5 and ns > ns_lower): ns_lower = ns
 
-Print("Discovery Threshold Bounds: %.2f < ns < %.2f" % (ns_lower, ns_upper), log)
+print "Discovery Threshold Bounds: %.2f < ns < %.2f" % (ns_lower, ns_upper)
 
 if (ns_lower > ns_upper):
-  Print("Uh-oh. We screwed up. %.2f > %.2f is just plain wrong." % (ns_lower, ns_upper), log)
+  print "Uh-oh. We screwed up. %.2f > %.2f is just plain wrong." % (ns_lower, ns_upper)
   exit(0)
 
 ##############################
@@ -273,7 +263,7 @@ if (ns_lower > ns_upper):
 # DISCOVERY POTENTIAL REFINED SEARCH #
 ######################################
 
-Print("\nRefining Search ... ", log)
+print "\nRefining Search ... "
 
 tol = args.tolerance # minimum tolerance on final flux
 ns_min = ns_lower
@@ -290,7 +280,6 @@ for step in range(0, nstep+1):
   # compute number of discoveries over 100 samples
   nsample = args.nsample
   ndisc   = 0
-  avg_ni  = 0
   for i in range(0,nsample):
 
     # get event sample for source
@@ -298,34 +287,31 @@ for step in range(0, nstep+1):
 
     # compute TS
     TS, Xmin = psllh.fit_source(src_ra,src_dec,inject=sample,scramble = True)
-#    print "  - [%d] ni %.2f, sigma %.2f" % (step, ni, np.sqrt(TS))
-    if numpy.sqrt(TS) >= 5: ndisc = ndisc + 1
 
-    avg_ni = avg_ni + float(ni)/nsample
+    # count discoveries
+    if numpy.sqrt(TS) >= 5: ndisc = ndisc + 1
 
   # END for (i)
 
   P = float(ndisc)/nsample
-  Print(" [%3d/%d] ns %.2f, discoveries %3d/%d = %.2f" % (step+1, nstep+1,ns, ndisc, nsample, P), log)
+  print " [%3d/%d] ns %.2f, discoveries %3d/%d = %.2f" % (step+1, nstep+1,ns, ndisc, nsample, P)
 
   if (P > 0.5 and ns < ns_upper): ns_upper = ns
   if (P < 0.5 and ns > ns_lower): ns_lower = ns
 
 # END for (step)
 
-Print("Discovery Threshold Bounds: %.2f < ns < %.2f" % (ns_lower, ns_upper), log)
+print "Discovery Threshold Bounds: %.2f < ns < %.2f" % (ns_lower, ns_upper)
 
 ns_avg = (ns_lower + ns_upper)/2.
 norm   = inj.mu2flux( ns_avg )
-Print("\n---", log)
-Print("Source Declination:  %.2f deg" % args.dec, log)
-Print("Flux Normalization:  A = %.2e TeV^-1 cm^-2 s^-1 @ %.2f TeV" % (norm*TeV, args.E0/TeV), log)
-Print("Spectral Assumption: dN/dE = A (E / %.2f TeV)^-%.2f" % (args.E0/TeV, args.index), log)
-if args.useEXPbackground: Print("Background:          EXP", log)
-else:                     Print("Background:          MC",  log)
-Print("---\n", log)
-
-log.close()
+print "\n---"
+print "Source Declination:  %.2f deg" % args.dec
+print "Flux Normalization:  A = %.2e TeV^-1 cm^-2 s^-1 @ %.2f TeV" % (norm*TeV, args.E0/TeV)
+print "Spectral Assumption: dN/dE = A (E / %.2f TeV)^-%.2f" % (args.E0/TeV, args.index)
+if args.useEXPbackground: print "Background:          EXP"
+else:                     print "Background:          MC"
+print "---\n"
 
 ######################################
 # DISCOVERY POTENTIAL REFINED SEARCH #
