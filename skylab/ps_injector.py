@@ -579,11 +579,17 @@ class TemplateInjector(Injector):
         if (max_dec >  np.pi/2):
           max_dec =  np.pi/2
 
+        # restrict to range of sinDec bins
+        if (min_dec < np.arcsin(self.sinDec_bins[0])):
+          min_dec = np.arcsin(self.sinDec_bins[0])
+        if (max_dec > np.arcsin(self.sinDec_bins[-1])):
+          max_dec = np.arcsin(self.sinDec_bins[-1])
+
         self._sinDec_range = [np.sin(min_dec), np.sin(max_dec)]
         delta = self._sinDec_range[1] - self._sinDec_range[0]
 
         if delta < self._sinDec_bandwidth:
-          raise ValueError("SinDec range too small. Must be at least %.2e" % self._sinDec_bandwidth)
+          raise ValueError("Sin(dec) range too small. Must be at least %.2e" % self._sinDec_bandwidth)
 
         return
 
@@ -746,7 +752,7 @@ class TemplateInjector(Injector):
 
         return
 
-    def fill(self, mc, livetime, sinDec_bins):
+    def fill(self, mc, livetime):
         r"""Fill the Injector with MonteCarlo events selecting events around
         the source position(s).
 
@@ -799,7 +805,7 @@ class TemplateInjector(Injector):
             mc_arr["trueE"] = self.mc[key]["trueE"]
             mc_arr["sinDec"] = self.mc[key]["sinDec"]
             mc_arr["trueDec"] = self.mc[key]["trueDec"]
-            mc_arr["dec_bin"] = np.digitize(self.mc[key]["sinDec"], sinDec_bins)
+            mc_arr["dec_bin"] = np.digitize(self.mc[key]["sinDec"], self.sinDec_bins)
 
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
