@@ -301,6 +301,12 @@ for step in range(0, nstep+1):
 
 # END for (step)
 
+# swap order at this point, we're close enough
+if (ns_lower > ns_upper):
+  tmp      = ns_upper
+  ns_upper = ns_lower
+  ns_lower = tmp
+
 print "Discovery Threshold Bounds: %.2f < ns < %.2f" % (ns_lower, ns_upper)
 
 ns_avg = (ns_lower + ns_upper)/2.
