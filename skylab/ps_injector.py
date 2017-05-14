@@ -544,13 +544,17 @@ class TemplateInjector(Injector):
         self.sinDec_bins = sinDec_bins
         self.coords = coords
 
-        # min and max dec of template
-        nside  = hp.get_nside(self.template)
-        npix   = hp.nside2npix(nside)
-        pixelr = np.sqrt( 1./(3.*nside*nside) )
+        # force template into dict object
+        if not isinstance(self.template, dict):
+            self.template = {-1: self.template}
+            self.all_enums = [-1]
+        else:
+            self.all_enums = range(len(sample_probs))
+        enum0 = self.all_enums[0]
 
-        if 'sinDec_bandwidth' not in kwargs:
-          self._setup()
+        # min and max dec of template
+        nside  = hp.get_nside(self.template[enum0])
+        npix   = hp.nside2npix(nside)
 
         # Set all other attributes passed to the class
         set_pars(self, **kwargs)
@@ -561,15 +565,15 @@ class TemplateInjector(Injector):
         for p in range(npix):
 
           # skip empty pixels
-          if self.template[p] <= 0: continue
+          if self.template[enum0][p] <= 0: continue
 
           # coordinates of pixel in equatorial map
           (th, ph) = hp.pix2ang(nside,p)
 
           # compute declination
           dec = np.pi/2 - th
-          if min_dec > dec - pixelr: min_dec = dec - pixelr
-          if max_dec < dec + pixelr: max_dec = dec + pixelr
+          if min_dec > dec: min_dec = dec
+          if max_dec < dec: max_dec = dec
 
         # add fudge factors
         min_dec -= np.arcsin(self._sinDec_bandwidth)
@@ -587,6 +591,8 @@ class TemplateInjector(Injector):
 
         self._sinDec_range = [np.sin(min_dec), np.sin(max_dec)]
         delta = self._sinDec_range[1] - self._sinDec_range[0]
+
+        self._setup()
 
         if delta < self._sinDec_bandwidth:
           raise ValueError("Sin(dec) range too small. Must be at least %.2e" % self._sinDec_bandwidth)
@@ -688,8 +694,6 @@ class TemplateInjector(Injector):
             val = min(1., np.fabs(val))
         self._sinDec_bandwidth = float(val)
 
-        self._setup()
-
         return
 
     @property
@@ -707,13 +711,10 @@ class TemplateInjector(Injector):
             logger.error("Injection declination not in sinDec_range!")
         self._src_dec = float(val)
 
-        self._setup()
-
         return
 
     def _setup(self):
-        r"""If one of *src_dec* or *dec_bandwidth* is changed or set, solid
-        angles and declination bands have to be re-set.
+        r"""Set solid angles and declination bands.
 
         """
 
@@ -865,12 +866,6 @@ class TemplateInjector(Injector):
 
         """
 
-        if not isinstance(self.template, dict):
-            self.template = {-1: self.template}
-            all_enums = [-1]
-        else:
-            all_enums = range(len(sample_probs))
-
         # generate event numbers using poissonian events
         while True:
             num = (self.random.poisson(mean_signal)
@@ -884,15 +879,15 @@ class TemplateInjector(Injector):
                 yield num, None
                 continue
 
-            enums_list     = self.random.choice(all_enums, size=num, p = sample_probs)
-            num_per_sample = np.array([len(enums_list[enums_list==i]) for i in all_enums])
+            enums_list     = self.random.choice(self.all_enums, size=num, p = sample_probs)
+            num_per_sample = np.array([len(enums_list[enums_list==i]) for i in self.all_enums])
             sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
             keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
             tot = 0
             tot_src_ra   = dict()
             tot_src_dec  = dict()
 
-            for enum in all_enums:
+            for enum in self.all_enums:
                 num = num_per_sample[enum]
                 if num == 0:
                     continue

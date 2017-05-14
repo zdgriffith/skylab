@@ -1371,13 +1371,14 @@ class PointSourceLLH(object):
         self._ev_S = self.llh_model.extended_signal(self.template_map, self.sigma_bins, self._ev, coords = self.coords)
 
         # do not calculate values with signal below threshold
-        ev_mask = self._ev_S > self.thresh_S
+        # or background outside template range
+        ev_mask = (self._ev_S > self.thresh_S) & (self._ev["B"]>0)
         self._ev = self._ev[ev_mask]
         self._ev_S = self._ev_S[ev_mask]
 
         # set number of selected events
         self._n = len(self._ev)
-
+        print("this many",self._n)
         if (self._n < 1
             and (np.sin(self._src_dec) < self.sinDec_range[0]
                  and np.sin(self._src_dec) > self.sinDec_range[-1])):
