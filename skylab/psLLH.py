@@ -1378,7 +1378,7 @@ class PointSourceLLH(object):
 
         # set number of selected events
         self._n = len(self._ev)
-        print("this many",self._n)
+
         if (self._n < 1
             and (np.sin(self._src_dec) < self.sinDec_range[0]
                  and np.sin(self._src_dec) > self.sinDec_range[-1])):
