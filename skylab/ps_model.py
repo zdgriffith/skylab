@@ -414,7 +414,7 @@ class ClassicLLH(NullModel):
         # rotate to galactic coords when desired
         if coords == 'galactic':
           r = hp.Rotator(coord = ['C','G'])
-          theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"]-np.pi)
+          theta_gal, phi_gal = r(np.pi/2. - np.arcsin(ev["sinDec"]), ev["ra"])
           return hp.ang2pix(nside, theta_gal, phi_gal)
 
         # otherwise return pix in equatorial coords

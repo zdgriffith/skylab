@@ -769,11 +769,6 @@ class TemplateInjector(Injector):
         if isinstance(mc, dict) ^ isinstance(livetime, dict):
             raise ValueError("mc and livetime not compatible")
 
-        if not "sinDec" in mc.dtype.fields:
-            mc = np.lib.recfunctions.append_fields(
-                    mc, "sinDec", np.sin(mc["dec"]),
-                    dtypes=np.float, usemask=False)
-
         self.mc = dict()
         self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
                                          ("trueE", np.float), ("ow", np.float),
@@ -784,6 +779,13 @@ class TemplateInjector(Injector):
             livetime = {-1: livetime}
 
         for key, mc_i in mc.iteritems():
+
+            # append sinDec if not present
+            if not "sinDec" in mc_i.dtype.fields:
+                mc_i = np.lib.recfunctions.append_fields(
+                        mc_i, "sinDec", np.sin(mc_i["dec"]),
+                        dtypes=np.float, usemask=False)
+
             # get MC event's in the selected energy and sinDec range
             band_mask = ((np.sin(mc_i["trueDec"]) > np.sin(self._min_dec))
                          &(np.sin(mc_i["trueDec"]) < np.sin(self._max_dec)))
