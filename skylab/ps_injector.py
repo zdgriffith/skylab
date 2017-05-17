@@ -584,9 +584,9 @@ class TemplateInjector(Injector):
           max_dec =  np.pi/2
 
         # restrict to range of sinDec bins
-        if (min_dec < np.arcsin(self.sinDec_bins[0])):
+        if (np.sin(min_dec) < self.sinDec_bins[0]):
           min_dec = np.arcsin(self.sinDec_bins[0])
-        if (max_dec > np.arcsin(self.sinDec_bins[-1])):
+        if (np.sin(max_dec) > self.sinDec_bins[-1]):
           max_dec = np.arcsin(self.sinDec_bins[-1])
 
         self._sinDec_range = [np.sin(min_dec), np.sin(max_dec)]
@@ -777,7 +777,7 @@ class TemplateInjector(Injector):
         self.mc = dict()
         self.mc_arr = np.empty(0, dtype=[("idx", np.int), ("enum", np.int),
                                          ("trueE", np.float), ("ow", np.float),
-                                         ("dec_bin", np.int), ("sinDec", np.float), ("trueDec", np.float)])
+                                         ("ids", np.int), ("sinDec", np.float), ("trueDec", np.float)])
 
         if not isinstance(mc, dict):
             mc = {-1: mc}
@@ -806,7 +806,7 @@ class TemplateInjector(Injector):
             mc_arr["trueE"] = self.mc[key]["trueE"]
             mc_arr["sinDec"] = self.mc[key]["sinDec"]
             mc_arr["trueDec"] = self.mc[key]["trueDec"]
-            mc_arr["dec_bin"] = np.digitize(self.mc[key]["sinDec"], self.sinDec_bins)
+            mc_arr["ids"] = self.ids( self.mc[key]["sinDec"] )
 
             self.mc_arr = np.append(self.mc_arr, mc_arr)
 
@@ -843,6 +843,20 @@ class TemplateInjector(Injector):
 
         return mu / self._raw_flux # [GeV^-1 cm^-2 s^-1]
 
+    def ids(self, sinDecs):
+      r"""Calculate sin(dec) bin ids for each event"
+
+      Parameters
+      -----------
+      sinDecs : array
+        list of sin(dec) values
+
+      Returns
+      --------
+        array with index of sinDec bin containing the event
+      """
+      return np.digitize(sinDecs, self.sinDec_bins)-1
+
     def sample(self, sample_probs, mean_signal, poisson=True):
         r""" Generator to get sampled events for a Point Source location.
 
@@ -866,167 +880,104 @@ class TemplateInjector(Injector):
 
         """
 
-        # generate event numbers using poissonian events
         while True:
-            num = (self.random.poisson(mean_signal)
-                        if poisson else int(np.around(mean_signal)))
 
-            logger.debug(("Generated number of sources: {0:3d} "+
-                          "of mean {1:5.1f} sources").format(num, mean_signal))
+            # Generate event numbers using Poisson events.
+            if poisson:
+                num = self.random.poisson(mean_signal)
+            else:
+                num = int(np.around(mean_signal))
 
-            # if no events should be sampled, return nothing
+            logger.info("Mean number of events {0:.1f}".format(mean_signal))
+            logger.info("Generated number of events {0:d}".format(num))
+
             if num < 1:
+                # No events will be sampled.
                 yield num, None
                 continue
 
-            enums_list     = self.random.choice(self.all_enums, size=num, p = sample_probs)
-            num_per_sample = np.array([len(enums_list[enums_list==i]) for i in self.all_enums])
+            # empty array with same structure as mc_arr
             sam_idx = np.empty(num, dtype=self.mc_arr.dtype)
-            keys    = ['idx', 'enum', 'ow', 'trueE', 'dec_bin']
-            tot = 0
-            tot_src_ra   = dict()
-            tot_src_dec  = dict()
 
+            # append ra & dec
+            sam_idx = np.lib.recfunctions.append_fields(sam_idx,
+                                                        names=["ra","dec"],
+                                                        dtypes=[np.float, np.float],
+                                                        data=[np.empty(num), np.empty(num)],
+                                                        usemask=False)
+            # get sample number for each event
+            sam_idx['enum'] = self.random.choice(self.all_enums, size=num, p = sample_probs)
+
+            # count number of events per sample
+            num_per_sample = np.array([len(sam_idx['enum'][sam_idx['enum']==i]) for i in self.all_enums])
+
+            # keys to save from randomly chosen MC events
+            keys = ['idx', 'enum', 'ow', 'trueE', 'ids']
+
+            # loop through each sample enum
             for enum in self.all_enums:
+
+                # get number of events in this sample
                 num = num_per_sample[enum]
-                if num == 0:
-                    continue
+                if num == 0: continue
 
-                nside   = hp.get_nside(self.template[enum])
-                npix    = hp.nside2npix(nside)
-            
-                src_pix = self.random.choice(npix, size=num, p=self.template[enum])
+                # select events for this enum
+                mask = (sam_idx['enum'] == enum)
+                ev   =  sam_idx[mask]
 
+                # randomly grab pixels from template
+                nside = hp.get_nside(self.template[enum])
+                npix  = hp.nside2npix(nside)
+                pix   = self.random.choice(npix, size=num, p=self.template[enum])
+
+                # compute theta & phi in equatorial coordinates
                 if self.coords == 'galactic':
-                    theta_gal, phi_gal = hp.pix2ang(nside, src_pix)
-                    theta_eq, phi_eq   = hp.Rotator(coord = ['G','C'], rot = [0,0])(theta_gal, phi_gal)
-                    src_dec            = np.pi/2. - theta_eq 
-                    src_ra             = phi_eq - np.pi
+                    theta_gal, phi_gal = hp.pix2ang(nside, pix)
+                    theta_eq,  phi_eq  = hp.Rotator(coord=['G','C'])(theta_gal, phi_gal)
                 else:
-                    theta_eq, src_ra = hp.pix2ang(nside, src_pix)
-                    src_dec          = np.pi/2. - theta_eq 
+                    theta_eq,  phi_eq  = hp.pix2ang(nside, pix)
 
-                tot_src_ra[enum] = src_ra
-                tot_src_dec[enum] = src_dec
+                ev['ra'    ] = phi_eq
+                ev['dec'   ] = np.pi/2. - theta_eq
+                ev['sinDec'] = np.sin(ev['dec'])
+                ev['ids'   ] = self.ids(ev['sinDec'])
 
-                if np.isscalar(src_dec):
-                    src_dec = np.array([src_dec])
+                # compute number of events per ids
+                n_ids = np.array([len(ev['ids'][ev['ids']==i]) for i in range(self.sinDec_bins.size)])
+               
+                # loop through events in sin(dec) bins
+                for i, n in enumerate(n_ids):
 
-                dec_bin_nums = np.digitize(np.sin(src_dec), self.sinDec_bins)
+                  # skip empty sin(dec) bins
+                  if n <= 0: continue
 
-                for i, dec in enumerate(src_dec):
-                    mask  = np.equal(self.mc_arr['enum'],enum)&np.equal(self.mc_arr['dec_bin'], dec_bin_nums[i])
-                    probs = self._norm_w[mask]/np.sum(self._norm_w[mask])
-                    sam   = self.random.choice(self.mc_arr[mask], p=probs)
-                    for key in keys:
-                        sam_idx[key][tot] = sam[key]
+                  # pull randomly from MC events with same ids
+                  ids_mask = np.equal(self.mc_arr['ids'], i)
+                  prob     = self._norm_w[ids_mask]/np.sum(self._norm_w[ids_mask])
+                  sam      = self.random.choice(self.mc_arr[ids_mask], size=n, p=prob)
+                 
+                  # save sam info into ev 
+                  for key in keys:
+                    ev[key][ev['ids'] == i] = sam[key]
+                    
+                # copy ev back into sam_idx
+                sam_idx[mask] = ev
 
-                    tot += 1
+            # get sample enums that contain events
+            enums = np.unique(sam_idx['enum'])
 
-            # get the events that were sampled
-            enums = np.unique(sam_idx["enum"])
-
+            # if only one sample, just return recarray
             if len(enums) == 1 and enums[0] < 0:
-                # only one sample, just return recarray
                 sam_ev = np.copy(self.mc[enums[0]][sam_idx["idx"]])
 
-                yield num, rotate_struct(sam_ev, src_ra, src_dec)
+                yield num, rotate_struct(sam_ev, sam_idx['ra'], sam_idx['dec'])
                 continue
 
             sam_ev = dict()
             for enum in enums:
-                idx = sam_idx[sam_idx["enum"] == enum]["idx"]
+                mask = (sam_idx['enum'] == enum)
+                idx = sam_idx[mask]['idx']
                 sam_ev_i = np.copy(self.mc[enum][idx])
-                sam_ev[enum] = rotate_struct(sam_ev_i, tot_src_ra[enum], tot_src_dec[enum])
+                sam_ev[enum] = rotate_struct(sam_ev_i, sam_idx[mask]['ra'], sam_idx[mask]['dec'])
 
             yield num, sam_ev
-
-class ModelInjector(PointSourceInjector):
-    r"""PointSourceInjector that weights events according to a specific model
-    flux.
-
-    Fluxes are measured in percent of the input flux.
-
-    """
-
-    def __init__(self, logE, logFlux, *args, **kwargs):
-        r"""Constructor, setting up the weighting function.
-
-        Parameters
-        -----------
-        logE : array
-            Flux Energy in units log(*self.GeV*)
-
-        logFlux : array
-            Flux in units log(*self.GeV* / cm^2 s), i.e. log(E^2 dPhi/dE)
-
-        Other Parameters
-        -----------------
-        deg : int
-            Degree of polynomial for flux parametrization
-
-        args, kwargs
-            Passed to PointSourceInjector
-
-        """
-
-        deg = kwargs.pop("deg", _deg)
-        ext = kwargs.pop("ext", _ext)
-
-        s = np.argsort(logE)
-        logE = logE[s]
-        logFlux = logFlux[s]
-        diff = np.argwhere(np.diff(logE) > 0)
-        logE = logE[diff]
-        logFlux = logFlux[diff]
-
-        self._spline = scipy.interpolate.InterpolatedUnivariateSpline(
-                            logE, logFlux, k=deg)
-
-        # use default energy range of the flux parametrization
-        kwargs.setdefault("e_range", [10.**np.amin(logE), 10.**np.amax(logE)])
-
-        # Set all other attributes passed to the class
-        set_pars(self, **kwargs)
-
-        return
-
-    def _weights(self):
-        r"""Calculate weights, according to given flux parametrization.
-
-        """
-        print("This part of the code is untested. Check ps_injector.py")
-        exit(0)
-        trueLogGeV = np.log10(self.mc_arr["trueE"])
-
-        logF = self._spline(trueLogGeV)
-        flux = np.power(10., logF - 2. * trueLogGeV)
-
-        # remove NaN's, etc.
-        m = (flux > 0.) & np.isfinite(flux)
-        self.mc_arr = self.mc_arr[m]
-
-        # assign flux to OneWeight
-        self.mc_arr["ow"] *= flux[m] / self._omega
-
-        self._raw_flux = np.sum(self.mc_arr["ow"], dtype=np.float)
-
-        self._norm_w = self.mc_arr["ow"] / self._raw_flux
-
-        return
-
-    def flux2mu(self, flux):
-        r"""Convert a flux to number of expected events.
-
-        """
-
-        return self._raw_flux * flux
-
-    def mu2flux(self, mu):
-        r"""Convert a mean number of expected events to a flux.
-
-        """
-
-        return float(mu) / self._raw_flux
-
-
