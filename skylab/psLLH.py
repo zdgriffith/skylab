@@ -1146,17 +1146,17 @@ class PointSourceLLH(object):
 
         assert(n == len(self._ev))
 
+        # w : (signal energy weights)/(background energy weights)
         w, grad_w = self.llh_model.weight(self._ev, **fit_pars)
 
+        # don't subtract signal if no scrambled source map given
         if self.scrambled_src_map is not None:
-            S_sc      = self.llh_model.signal_sc(self.scrambled_src_map, self._ev, coords = self.coords)
-            B         = (1/w)*(1 + nsources/float(N))*self._ev["B"] - (nsources/float(N))*S_sc
-            SoB       = self._ev_S / B
+            S_sc = self.llh_model.signal_sc(self.scrambled_src_map, self._ev, coords = self.coords)
+            SoB  = w*self._ev_S/self._ev["B"] - w*S_sc/self._ev["B"]
+            x    = SoB / N
         else:
-            SoB = self._ev_S / self._ev["B"]
-
-
-        x = (SoB - 1.) / N
+            SoB = w*self._ev_S / self._ev["B"]
+            x = (SoB - 1.) / N
 
         # check which sums of the likelihood are close to the divergence
         aval = -1. + _aval
