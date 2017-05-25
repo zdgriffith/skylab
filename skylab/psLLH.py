@@ -94,7 +94,7 @@ _src_dec = np.nan
 _src_ra = np.nan
 _seed = None
 _sindec_bins = np.linspace(-1., 1., 100. + 1)
-_thresh_S = 0.
+_thresh_S = None
 _ub_perc = 1.
 _win_points = 50
 
@@ -1370,9 +1370,13 @@ class PointSourceLLH(object):
         # calculate signal term
         self._ev_S = self.llh_model.extended_signal(self.template_map, self.sigma_bins, self._ev, coords = self.coords)
 
-        # do not calculate values with signal below threshold
-        # or background outside template range
-        ev_mask = (self._ev_S > self.thresh_S) & (self._ev["B"]>0)
+        # do not select events outside of background template
+        ev_mask = (self._ev["B"] > 0)
+
+        # do not select events with signal below user defined threshold
+        if self.thresh_S is not None:
+          ev_mask = ev_mask & (self._ev_S > self.thresh_S)
+
         self._ev = self._ev[ev_mask]
         self._ev_S = self._ev_S[ev_mask]
 
